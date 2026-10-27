@@ -381,7 +381,19 @@ function openRelata(cfg, { write = false } = {}) {
     }
     return d;
   }
-  const count = async (t) => { const d = await run(`SELECT COUNT(*) FROM ${t}`, 5000); const v = Object.values(d.data?.[0] || {})[0]; return v === undefined ? null : Number(v); };
+  // Relata's COUNT(*) still includes rows that were deleted (tombstones) until it compacts. So check that the last counted
+  // row really exists; if not, find the true number of live rows by probing offsets (about log2(n) cheap queries).
+  const exists = async (t, i) => ((await run(`SELECT * FROM ${t} LIMIT 1 OFFSET ${i}`, 5000)).data || []).length > 0;
+  const count = async (t) => {
+    const d = await run(`SELECT COUNT(*) FROM ${t}`, 5000);
+    const v = Object.values(d.data?.[0] || {})[0];
+    if (v === undefined) return null;
+    const n = Number(v);
+    if (n === 0 || n > OFFSET_CAP || (await exists(t, n - 1))) return n;
+    let lo = 0, hi = n - 1; // exists(i) is true exactly when i < live
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (await exists(t, mid)) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
   return {
     async containers({ counts = true } = {}) {
       const types = relataTypes(cfg).filter((t) => TYPE_NAME.test(t));
