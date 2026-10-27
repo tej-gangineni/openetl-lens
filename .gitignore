@@ -6,3 +6,4 @@ connections.json.tmp
 .DS_Store
 # downloaded skill sources: fetch with scripts/fetch-skills.sh
 .claude/skills/*/upstream/
+.claude/skills/mantine-ui/docs/

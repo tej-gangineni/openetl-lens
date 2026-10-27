@@ -1,0 +1,7 @@
+source: https://github.com/manutej/luxor-claude-marketplace/tree/main/plugins/luxor-design-toolkit/skills/ux-principles
+last upstream change fetched: commit 05beeee8bd
+fetched: 2026-10-27
+license: not stated in the repository; used here only as local guidance, not republished
+
+SKILL.md here = the upstream front matter + the 'OpenETL Lens notes' block; the upstream body is not committed.
+The verbatim upstream files are in upstream/ (not committed). To refresh: scripts/fetch-skills.sh.

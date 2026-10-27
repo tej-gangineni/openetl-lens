@@ -8,7 +8,7 @@ metadata:
 ---
 
 ## OpenETL Lens notes (project addition, not part of the upstream skill)
-- Lens is a client-only React 18 app built with Vite. Skip the server-, Next.js- and RSC-specific rules. Use: rerender-* (memo rows, functional setState, derived state without effects, primitive effect dependencies), client-* (passive scroll listeners, dedupe requests), rendering-* and js-* (avoid layout reads in render, batch work), async-parallel for independent requests.
+- Lens is a client-only React 19 app built with Vite. Skip the server-, Next.js- and RSC-specific rules. Use: rerender-* (memo rows, functional setState, derived state without effects, primitive effect dependencies), client-* (passive scroll listeners, dedupe requests), rendering-* and js-* (avoid layout reads in render, batch work), async-parallel for independent requests.
 - Lists: rows are memoized and use content-visibility: auto; never render more than the bounded window described in API_CONTRACT.md.
 
 # Vercel React Best Practices

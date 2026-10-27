@@ -94,42 +94,19 @@ const probe = (c) => {
 };
 app.get("/api/overview", h(async () => ({ sources: await Promise.all(all().map(probe)) })));
 
-/* ---- insights (built-in lab stores only; every part bounded and independent) */
+/* ---- highlights: generic, worked out from whatever is connected (counts only, bounded like the overview) */
 app.get("/api/insights", h(async () => {
-  // a removed sample connection must fail only its own chart, so hand back an object whose calls reject
-  const lab = (id) => {
-    const c = find(id);
-    if (c) return handleFor(c);
-    const fail = () => Promise.reject(new HttpError(404, "This chart needs a sample connection that was removed. Restore it from the home page."));
-    return { pool: { query: fail }, q: fail, req: fail, db: fail };
+  const probes = await Promise.all(all().map(probe));
+  const up = probes.filter((p) => p.ok);
+  const byValueDesc = (x, y) => y.value - x.value;
+  const largest = up.flatMap((p) => p.containers.filter((c) => c.count != null).map((c) => ({ label: c.name, group: p.name, value: c.count })))
+    .sort(byValueDesc).slice(0, 12);
+  return {
+    records: up.map((p) => ({ label: p.name, value: p.containers.reduce((n, c) => n + (c.count || 0), 0) })).sort(byValueDesc),
+    tables: up.map((p) => ({ label: p.name, value: p.containers.length })).sort(byValueDesc),
+    largest,
+    unreachable: probes.filter((p) => !p.ok).map((p) => ({ name: p.name, error: p.error })),
   };
-  const [months, tickets, towers, pages, notes] = await Promise.allSettled([
-    lab("pg").pool.query(`select substring(text from 'Date: (\\d{4}-\\d{2})') as month, count(*)::int as incidents,
-        coalesce(sum(replace(substring(text from 'affected: ([\\d,]+)'), ',', '')::int), 0)::bigint::float8 as customers
-        from incident_reports group by 1 order by 1 limit 240`).then((r) => r.rows),
-    (async () => {
-      const col = (await lab("mongo").db()).collection("support_tickets");
-      const by = async (key) => (await col.aggregate([{ $limit: 20000 }, { $set: { m: { $regexFind: { input: "$text", regex: new RegExp(key + ": (\\w+)") } } } },
-        { $group: { _id: { $arrayElemAt: ["$m.captures", 0] }, n: { $sum: 1 } } }, { $sort: { n: -1 } }, { $limit: 50 }], { maxTimeMS: 5000 }).toArray())
-        .map((r) => ({ label: r._id || "unknown", value: r.n }));
-      return { category: await by("category"), status: await by("status"), priority: await by("priority") };
-    })(),
-    lab("ch").q("select sum(countSubstrings(text, '| ok |')) as ok, sum(countSubstrings(text, '| degraded |')) as degraded from (select text from tower_metrics limit 20000)")
-      .then((r) => ({ ok: Number(r.data[0].ok), degraded: Number(r.data[0].degraded) })),
-    Promise.all(["outage", "maintenance", "upgrade", "coverage"].map(async (w) => ({ label: w, value: (await lab("es").req("/status_pages/_count", { query: { simple_query_string: { query: w, fields: ["text"] } } })).count }))),
-    (async () => {
-      const qd = lab("qdrant"), m = {}; let off = null, seen = 0;
-      while (seen < 2000) { // bounded scan: at most 2,000 points
-        const r = await qd.req("/collections/field_notes/points/scroll", { limit: Math.min(500, 2000 - seen), offset: off, with_payload: true, with_vector: false });
-        for (const p of r.points) { const site = String(p.payload?.content || "").split(",")[0].slice(0, 80); m[site] = (m[site] || 0) + 1; }
-        seen += r.points.length; off = r.next_page_offset;
-        if (off === null || off === undefined) break;
-      }
-      return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([label, value]) => ({ label, value }));
-    })(),
-  ]);
-  const v = (p) => (p.status === "fulfilled" ? p.value : { error: mapError(p.reason).error });
-  return { incidentsByMonth: v(months), tickets: v(tickets), readings: v(towers), pagesByTopic: v(pages), notesBySite: v(notes) };
 }));
 
 /* ---- unknown API paths and bad JSON */

@@ -23,13 +23,12 @@ The full record behind a cut-off row is fetched on demand when you open it.
 
 ## Folders
 - `server/` Express API: `index.js` routes, `connections.js` saved and built-in connections, `stores.js` one adapter per database type, `util.js` limits and helpers.
-- `web/src/` React app: `App.jsx` shell and routes, `Sidebar.jsx`, `Home.jsx`, `ConnectionView.jsx`, `Browser.jsx` (infinite-scroll grid), `Detail.jsx` (record drawer),
-  `ConnectionDialogs.jsx` + `Dialog.jsx` + `Toast.jsx` (add, test, delete), `Highlights.jsx` (charts for the lab data), `tokens.css` (colours and type), `typeMeta.js` (connection types).
+- `web/src/` React app built on Mantine, with no hand-written CSS (only Mantine props and `theme.js`): `App.jsx` shell and routes, `LogoToggle.jsx` (the logo turns into the open/close control on hover), `NavTree.jsx` (connections with their tables nested beneath), `SearchPalette.jsx` (Ctrl/Cmd+K), `HomePage.jsx`, `ConnectionPage.jsx` + `DataGrid.jsx` + `useRows.js` (infinite scroll), `RowDrawer.jsx`, `QueryConsole.jsx`, `AddDataModal.jsx`, `HighlightsPage.jsx` (generic charts for whatever is connected), `typeMeta.js` (connection types).
 - `.claude/skills/` the design skills this UI was built with (see below). `lens-ui` is the project brief.
 - `brand/` the logo (`logo.svg` with the name, `logo-mark.svg` alone). The same mark is `web/public/favicon.svg`.
 - `API_CONTRACT.md` the API.
 
 ## Skills used to build the UI
 Downloaded from the internet on 2026-10-27 and adapted with a short "OpenETL Lens notes" block each. `UPSTREAM.txt` in each skill names the source, commit and licence. The verbatim originals are not committed: run `scripts/fetch-skills.sh` to download them into each skill's `upstream/` folder.
-`frontend-design` (Anthropic, Apache-2.0), `web-design-guidelines` (Vercel, no licence stated, local guidance only), `react-best-practices` and `composition-patterns` (Vercel, MIT).
+`frontend-design` (Anthropic, Apache-2.0), `web-design-guidelines` (Vercel, no licence stated, local guidance only), `react-best-practices` and `composition-patterns` (Vercel, MIT), `mantine-form` (mantinedev, MIT), `ux-principles` (notes only), `mantine-ui` (ours; its `docs/` are fetched by `scripts/fetch-skills.sh`).
 `lens-ui` is our own skill that ties them to this app.

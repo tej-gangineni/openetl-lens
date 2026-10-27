@@ -1,50 +1,39 @@
 ---
 name: lens-ui
-description: Design brief and rules for the OpenETL Lens web UI. Use when building or changing anything in openetl-lens/web. Combines the frontend-design, web-design-guidelines, react-best-practices and composition-patterns skills into one Metabase-style, very minimal data browser.
+description: Design and UX brief for the OpenETL Lens web UI, built with Mantine and no hand-written CSS. Use when building or changing anything in openetl-lens/web.
 ---
 
 # OpenETL Lens UI
 
-Read these first, in this order, and apply them:
-1. `.claude/skills/frontend-design/SKILL.md` (design process and what to avoid)
-2. `.claude/skills/web-design-guidelines/upstream/command.md` (the rules you will be reviewed against)
-3. `.claude/skills/composition-patterns/SKILL.md` and `.claude/skills/react-best-practices/SKILL.md` (React 18, Vite, client only)
-4. `API_CONTRACT.md` (the API; also the pagination and bounded-DOM rules)
-5. `web/src/tokens.css` and `web/src/typeMeta.js`, `web/src/Badge.jsx` (shared tokens, connection types, badge; do not invent new palettes)
+Read first: `.claude/skills/mantine-ui/SKILL.md` (the library, the no-CSS rule, which doc page to read), `.claude/skills/ux-principles/SKILL.md` (the usability checklist), `.claude/skills/frontend-design/SKILL.md` (taste: avoid template tells, restraint),
+`.claude/skills/mantine-form/SKILL.md` (forms), `.claude/skills/web-design-guidelines/SKILL.md` (accessibility and interaction rules; the rules text is in its `upstream/command.md`), `.claude/skills/composition-patterns/SKILL.md` and `.claude/skills/react-best-practices/SKILL.md` (React 19), `API_CONTRACT.md`.
 
 ## What it is
-A very small Metabase-like app. Someone adds a database, tests it, browses its tables and scrolls its rows, and deletes it when done.
-That is all. No dashboards builder, no questions, no settings page. Fewer controls is the goal.
+A very small Metabase-style data browser. Connect a database, test it, browse its tables, scroll rows, search, open a row, delete the connection. Nothing else. Every connection looks like its own data: its colour, icon and name carry the screen it is on.
 
-## The one idea: every connection looks like its own data
-When a connection is open, the whole view takes that connection's identity: its accent colour (`data-scope="<type>"` on the container sets `--accent`),
-its badge, its name in the page title (`document.title = "Name · OpenETL Lens"`), and only its own tables. Buttons, focus rings, selected rows and links use `--accent`.
-Nothing from other connections is visible inside the scoped view except the sidebar list.
+## No CSS
+We write no CSS (see mantine-ui). All layout and look come from Mantine components, style props and `web/src/theme.js`. The only stylesheets are Mantine's own, imported in `main.jsx`.
+
+## Layout: one sidebar, no top bar
+- `AppShell` with a **navbar only**. There is no header and no top bar.
+- **Logo and sidebar toggle share one spot**, top-left of the sidebar. At rest it shows the OpenETL Lens logo (`Logo.jsx`). When the pointer is over it (`useHover`) or it has keyboard focus, the logo is replaced by the open/close icon (`IconLayoutSidebarLeftCollapse` / `IconLayoutSidebarLeftExpand`) with the tooltip "Close sidebar" / "Open sidebar" and the shortcut. Click toggles. Next to it sits the wordmark "OpenETL Lens". It must be a real button with an `aria-label`, and touch devices simply show the toggle icon.
+- When the sidebar is closed, the same logo/toggle stays fixed at the top-left of the page (same position, `pos="fixed"`), so it can always be reopened, and the page content leaves room for it. The state is remembered (`useLocalStorage`) and `Ctrl/Cmd + B` toggles it. Under the `sm` breakpoint the navbar is an overlay.
+- Sidebar content, top to bottom: the logo/toggle row; a full-width **Add data** button; a "Search... Ctrl K" button that opens the command palette; the heading "Your data"; the **tree**; at the bottom a **Highlights** link and the light/dark/auto switch (`SegmentedControl` with icons).
+- **The tree is the navigation.** Each connection is a `NavLink` (type icon, name, a small status dot). The open connection is expanded and its **tables are nested beneath it** as child `NavLink`s with their row counts (`Badge`). Tables are not shown anywhere else. Clicking a connection selects it and expands it; the first table opens automatically. While tables load show `Skeleton` rows.
 
 ## Screens
-1. Shell: slim top bar (brand "OpenETL Lens" on the left, a quiet "Highlights" link on the right), a left sidebar 272 px wide, content on the right.
-   Sidebar: heading "Your data", one row per connection (badge, name, small status dot), the open one highlighted with its accent tint, and a primary button "Add data" pinned at the top of the list.
-   Under 800 px the sidebar becomes a horizontally scrolling strip above the content.
-2. Home `#home`: title "Your data". A grid of connection tiles: badge, name, "12 tables" or "1,000 records", status. Click opens the connection. Empty state: "No data connected yet. Add a database to start browsing." with the Add data button.
-3. Connection `#c/<id>` (scoped). A header with large badge, name, the masked summary (host and database), a status line ("Connected" / the error), and two actions: "Test" and "Delete" (no Delete for built-in connections;
-   explain with text "Built in" instead). Below it, the tables: a left list of tables (name and count) like Metabase's Browse data, and to the right the data grid for the chosen table with a search box "Search in <table>…".
-   For relata add a switch "Browse | Query" (the SQL console). Table names come from `/api/c/:id/containers`.
-4. Data grid: sticky header, comfortable row height, first 8 columns, ids in the monospace face, long text clamped to 2 lines, numbers right-aligned with tabular-nums, row hover tint, click or Enter opens the row in a drawer on the right
-   (not a centred modal) with every field, the full text, and for markdown tables the parsed grid and line charts. Infinite scroll, page size 100, bounded to 3,000 mounted rows, exactly as API_CONTRACT.md says.
-   If a long value is cut ("…") and the row has `__ref`, the drawer fetches the whole record from `GET /api/c/:id/row?container=NAME&ref=REF` (response `{ "row": {...} }`); if that endpoint is missing, just show what you have with a note.
-5. Add data dialog (opened from the sidebar button or the home empty state): step 1 pick a type from six tiles (badge, name, one-line blurb); step 2 the fields for that type (from `typeMeta.js`), "Test connection" shows a result inline
-   (green "Connected. Found 3 tables." or the error text in plain words), "Save" stays disabled until a test has passed, Back and Cancel always work. After saving, go straight to the new connection.
-6. Delete dialog: "Delete <name>?" and the sentence "This removes the connection from Lens. Your data is not touched." Buttons: Cancel, Delete (destructive style). Never use window.confirm. After deleting, return to Home and show a toast "<name> deleted".
-7. Highlights `#highlights`: the existing seven charts from `/api/insights`, moved off the main path. Keep them simple.
+1. **Home** (`#home`): title "Your data"; a grid of connection cards (icon, name, "12 tables · 1,000 records", status). Empty state: icon, "No data connected yet", Add data button, and Restore sample connections when some are hidden. A quiet "N sample connections are hidden. Restore" line otherwise.
+2. **Connection and table** (`#c/<id>?t=<table>`): `Breadcrumbs` (Your data, connection, table); a title row with the table name and a count badge; a one-line summary of the connection in `Code`; a status `Badge`; a `Menu` (three dots) with Test connection, Delete connection. Below: search `TextInput` (placeholder "Search in <table>", clear button, `/` focuses it) and a column picker (`Menu` or `Popover` with checkboxes, first 8 columns on by default, readable columns first). Then the grid.
+3. **Grid**: Mantine `Table` in a `ScrollArea` that fills the height, sticky header, rows clickable and keyboard reachable, numbers right-aligned, ids in the monospace face, long text clamped (`lineClamp`), search matches highlighted (`Highlight`). **Infinite scroll, page size 100, one request in flight, abort stale requests, 300 ms debounce, at most 3,000 rows mounted** with a "Load the next 1,000" button, exactly as in API_CONTRACT.md. `useIntersection` for the sentinel. Skeleton rows while loading, an error `Alert` with Retry, an empty state ("No rows match 'x'").
+4. **Row drawer** (`Drawer`, right): `Tabs` Fields, Text, JSON. Fields as a definition list with a copy button each; Text shows the full text; if it holds a markdown table, parse it and show a table plus `LineChart`s of the numeric columns; JSON shows the whole record in `Code` with `CopyButton`. If a value was cut (ends with the ellipsis) and the row has `__ref`, fetch `GET /api/c/:id/row?container=&ref=` and show the full record (loading skeleton, graceful note on failure).
+4b. **Relata**: a `SegmentedControl` Browse / Query in the title row; Query is a console (`Textarea`, example chips, Run with `loading`, results table, plain-language errors).
+5. **Add data** (`Modal`): step 1, a grid of six type cards (icon, name, one line); step 2, a form (`@mantine/form`) with the type's fields, a name, **Test connection** (`loading`, result in an `Alert`: "Connected. Found 3 tables." or the error in plain words) and **Save** (disabled until the test passed for the current values). Back, Cancel, Enter submits, Escape closes. After saving go to the new connection and show a notification.
+6. **Delete**: `modals.openConfirmModal` titled "Delete <name>?", text "This removes the connection from Lens. Your data is not touched." (plus, for a sample connection, "You can bring it back with Restore sample connections on the home page."), confirm button red "Delete". After deleting: go Home, notification "<name> deleted".
+7. **Highlights** (`#highlights`): cards with `BarChart`s from `@mantine/charts` for `/api/insights` (a chart whose data has `error` shows that message in its card).
+8. **Command palette** (`@mantine/spotlight`, Ctrl/Cmd + K): actions for Add data, Highlights, every connection, and every table of the open connection. Selecting navigates.
 
-## Visual direction (from the frontend-design skill, specific to this brief)
-- Calm, light, airy: canvas `--canvas`, surfaces `--surface`, hairline `--line` borders, almost no shadow (only dialogs, drawer and menus use `--shadow-pop`). No gradients. No card piles with identical shadows.
-- Type: `--font-ui` throughout, one size scale from tokens, sentence case, no all-caps labels, no letter-spaced eyebrows, no middle-dot meta strings, no arrows appended to buttons. Monospace only for ids, URLs and SQL.
-- Colour: neutral everywhere; the connection accent is the only strong colour on screen. Status uses `--ok`, `--warn`, `--bad` with their soft backgrounds.
-- Motion: only in answer to an action (drawer slides in, dialog fades, toast appears). 150 ms, transform and opacity only, never `transition: all`, all of it off under `prefers-reduced-motion` (tokens.css already zeroes durations).
-- Copy: plain words, active voice, buttons say what happens ("Add data", "Test connection", "Save", "Delete"). Errors say what went wrong and how to fix it. Empty states invite the next step.
+## UX rules (from the ux-principles skill)
+Visible status everywhere (skeletons, per-panel errors with Retry), plain words ("tables", "collections", "indices" per type), nothing destructive without a confirmation, every dialog closes with Escape, consistent names (Add data, Test connection, Save, Delete), remembered choices (sidebar, theme, last table), shortcuts for experts, an empty state that says what to do next. Sentence case. No jargon such as "built in" or "ref".
 
 ## Quality floor
-Keyboard reachable everywhere, visible `:focus-visible` rings, labels on every field, `aria-label` on icon-only buttons, `aria-live="polite"` for test results and toasts, dialogs trap focus and close on Escape,
-`overscroll-behavior: contain` in dialogs and the drawer, works at 400 px wide with no horizontal page scroll, dark mode through the tokens, `font-variant-numeric: tabular-nums` on counts.
-Performance: memoized rows, `content-visibility: auto`, passive listeners, one request in flight, abort stale requests, no layout reads in render.
+Keyboard reachable everywhere with visible focus, labels on fields, `aria-label` on icon-only buttons, `aria-live` for results, works at 400 px wide, dark mode through Mantine's color scheme, counts use `Intl.NumberFormat`, tabular numbers. Memoize rows, no layout reads in render, passive listeners.

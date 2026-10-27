@@ -13,7 +13,7 @@ metadata:
 ---
 
 ## OpenETL Lens notes (project addition, not part of the upstream skill)
-- Lens is on React 18: ignore the react19-* rules (use forwardRef where a ref is needed).
+- Lens is on React 19 (Mantine 9 requires it): the react19-* rules apply (ref as a prop, `use()` for context).
 - Apply: no boolean-prop piles (use explicit variant components such as AddConnectionDialog and DeleteConnectionDialog), compound components for the connection header and the data grid, state lives in one provider or one parent, children over render props.
 
 # React Composition Patterns

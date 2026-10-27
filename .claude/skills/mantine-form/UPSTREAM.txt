@@ -1,0 +1,7 @@
+source: https://github.com/mantinedev/skills/tree/master/skills/mantine-form
+last upstream change fetched: commit 607846dbc3
+fetched: 2026-10-27
+license: MIT (github.com/mantinedev/skills, LICENSE)
+
+SKILL.md here = the upstream front matter + the 'OpenETL Lens notes' block + the upstream body.
+The verbatim upstream files are in upstream/ (not committed). To refresh: scripts/fetch-skills.sh.

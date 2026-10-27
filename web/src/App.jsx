@@ -1,25 +1,69 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import Sidebar from "./Sidebar.jsx";
-import Home from "./Home.jsx";
-import ConnectionView from "./ConnectionView.jsx";
-import Highlights from "./Highlights.jsx";
-import Logo from "./Logo.jsx";
-import { AddConnectionDialog, DeleteConnectionDialog } from "./ConnectionDialogs.jsx";
-import { ToastProvider, useToast } from "./Toast.jsx";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { AppShell, Box, Button, Center, Divider, Kbd, NavLink, ScrollArea, SegmentedControl, Stack, Text, ThemeIcon, Title, useMantineColorScheme } from "@mantine/core";
+import { useDisclosure, useHotkeys, useLocalStorage, useMediaQuery } from "@mantine/hooks";
+import { notifications } from "@mantine/notifications";
+import { spotlight } from "@mantine/spotlight";
+import { IconChartBar, IconDeviceDesktop, IconMoon, IconPlus, IconSearch, IconSun, IconPlugConnectedX } from "@tabler/icons-react";
+import { AppContext, useApp } from "./AppContext.jsx";
+import { useConnections } from "./useConnections.js";
+import LogoToggle, { MOD } from "./LogoToggle.jsx";
+import NavTree from "./NavTree.jsx";
+import SearchPalette from "./SearchPalette.jsx";
+import HomePage from "./HomePage.jsx";
+import HighlightsPage from "./HighlightsPage.jsx";
+import ConnectionPage from "./ConnectionPage.jsx";
+import AddDataModal from "./AddDataModal.jsx";
+import { confirmDelete } from "./confirmDelete.js";
 import { api } from "./api.js";
 import { parseHash, connHref } from "./nav.js";
 
-function Shell() {
-  const toast = useToast();
-  const mainRef = useRef(null);
+const lastTableKey = (id) => `lens.table.${id}`;
+const remembered = (id) => { try { return localStorage.getItem(lastTableKey(id)); } catch { return null; } };
+const remember = (id, table) => { try { localStorage.setItem(lastTableKey(id), table); } catch { /* storage blocked */ } };
+
+function Navbar({ route, onNavigate }) {
+  const { openAdd, sidebarOpen, toggleSidebar } = useApp();
+  const { colorScheme, setColorScheme } = useMantineColorScheme();
+  return (
+    <AppShell.Navbar id="lens-sidebar" p="md" aria-label="Sidebar">
+      <AppShell.Section mb="md"><LogoToggle open={sidebarOpen} onToggle={toggleSidebar} wordmark /></AppShell.Section>
+      <AppShell.Section>
+        <Stack gap="xs">
+          <Button fullWidth size="md" leftSection={<IconPlus size={18} />} onClick={() => { onNavigate(); openAdd(); }}>Add data</Button>
+          <Button fullWidth variant="default" justify="space-between" leftSection={<IconSearch size={16} />} rightSection={<Kbd size="xs">{MOD} K</Kbd>}
+            onClick={() => spotlight.open()} aria-label={`Search, shortcut ${MOD} K`} fw={400} c="dimmed">Search…</Button>
+        </Stack>
+        <Title order={2} size="xs" c="dimmed" fw={600} mt="lg" mb={6} px="xs">Your data</Title>
+      </AppShell.Section>
+      <AppShell.Section grow component={ScrollArea} type="auto" scrollbars="y" mx={-8} px={8}>
+        <NavTree route={route} onNavigate={onNavigate} />
+      </AppShell.Section>
+      <AppShell.Section pt="sm">
+        <Divider mb="xs" />
+        <NavLink href="#highlights" onClick={onNavigate} active={route.page === "highlights"} variant="light" label="Highlights"
+          leftSection={<IconChartBar size={18} stroke={1.6} aria-hidden="true" />} />
+        <SegmentedControl fullWidth size="xs" mt="xs" aria-label="Color theme" value={colorScheme} onChange={setColorScheme}
+          data={[
+            { value: "light", label: <Center inline><IconSun size={14} aria-hidden="true" /><Box component="span" ml={6}>Light</Box></Center> },
+            { value: "dark", label: <Center inline><IconMoon size={14} aria-hidden="true" /><Box component="span" ml={6}>Dark</Box></Center> },
+            { value: "auto", label: <Center inline><IconDeviceDesktop size={14} aria-hidden="true" /><Box component="span" ml={6}>Auto</Box></Center> },
+          ]} />
+      </AppShell.Section>
+    </AppShell.Navbar>
+  );
+}
+
+export default function App() {
+  const data = useConnections();
+  const { conns, refresh, getTables, loadTables } = data;
   const [route, setRoute] = useState(parseHash);
-  const [conns, setConns] = useState(null), [connErr, setConnErr] = useState("");
-  const [ov, setOv] = useState(null), [ovErr, setOvErr] = useState("");
-  const [adding, setAdding] = useState(false), [deleting, setDeleting] = useState(null);
-  const [hiddenDefaults, setHiddenDefaults] = useState(0);
-  // the left panel can be closed to give the data the whole width; the choice is remembered
-  const [railOpen, setRailOpen] = useState(() => { try { return localStorage.getItem("lens.rail") !== "closed"; } catch { return true; } });
-  useEffect(() => { try { localStorage.setItem("lens.rail", railOpen ? "open" : "closed"); } catch { /* private mode */ } }, [railOpen]);
+  const [addOpen, addHandlers] = useDisclosure(false);
+  const mobile = useMediaQuery("(max-width: 47.99em)");
+  const [desktopOpen, setDesktopOpen] = useLocalStorage({ key: "lens.sidebar", defaultValue: true, getInitialValueInEffect: false });
+  const [mobileOpen, mobileHandlers] = useDisclosure(false);
+  const sidebarOpen = mobile ? mobileOpen : desktopOpen;
+  const toggleSidebar = useCallback(() => { if (mobile) mobileHandlers.toggle(); else setDesktopOpen((o) => !o); }, [mobile, mobileHandlers, setDesktopOpen]);
+  useHotkeys([["mod+B", toggleSidebar]]);
 
   useEffect(() => {
     const f = () => setRoute(parseHash());
@@ -27,78 +71,78 @@ function Shell() {
     return () => window.removeEventListener("hashchange", f);
   }, []);
 
-  const loadConns = useCallback(async () => {
-    try { const d = await api("/connections"); setConns(d.connections); setHiddenDefaults(d.hiddenDefaults || 0); setConnErr(""); }
-    catch (e) { setConnErr(e.message); setConns((c) => c || []); }
-  }, []);
-  // The overview probes every store, which is slow, so statuses and counts fill in when it arrives.
-  const loadOv = useCallback(() => {
-    setOvErr("");
-    api("/overview").then(setOv).catch((e) => setOvErr(e.message));
-  }, []);
-  const refresh = useCallback(async () => { await loadConns(); setOv(null); loadOv(); }, [loadConns, loadOv]);
-  useEffect(() => { loadConns(); loadOv(); }, [loadConns, loadOv]);
-
   const cur = route.page === "c" ? conns?.find((c) => c.id === route.id) : null;
   useEffect(() => {
-    document.title = cur ? `${cur.name} · OpenETL Lens` : route.page === "highlights" ? "Highlights · OpenETL Lens" : "Your data · OpenETL Lens";
+    document.title = cur ? `${cur.name} · OpenETL Lens` : route.page === "highlights" ? "Highlights · OpenETL Lens"
+      : route.page === "c" ? "Not found · OpenETL Lens" : "Your data · OpenETL Lens";
   }, [cur, route.page]);
 
-  const statusOf = useCallback((id) => {
-    const s = ov?.sources.find((x) => x.id === id);
-    return s ? (s.ok ? "up" : "down") : "unknown";
-  }, [ov]);
+  // opening a connection loads its tables; with none chosen, the last one used (or the first) opens
+  const tables = cur ? getTables(cur.id) : null;
+  useEffect(() => { if (cur) loadTables(cur.id); }, [cur?.id, loadTables]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!cur || !route.table) return;
+    remember(cur.id, route.table);
+  }, [cur?.id, route.table]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!cur || route.table || route.view === "query" || tables?.status !== "ok" || tables.items.length === 0) return;
+    const names = tables.items.map((t) => t.name);
+    const last = remembered(cur.id);
+    location.replace(connHref(cur.id, { table: names.includes(last) ? last : names[0] }));
+  }, [cur?.id, route.table, route.view, tables]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const restore = async () => {
+  const openAdd = addHandlers.open;
+  const restore = useCallback(async () => {
     try {
       const d = await api("/connections/restore-defaults", { method: "POST" });
       await refresh();
-      toast(d.restored === 1 ? "1 sample connection restored" : `${d.restored} sample connections restored`, "success");
-    } catch (e) { toast(e.message, "error"); }
-  };
-  const onSaved = async (c) => { setAdding(false); await refresh(); location.hash = connHref(c.id); };
-  const onDeleted = async () => {
-    const name = deleting?.name;
-    setDeleting(null); location.hash = "home";
+      notifications.show({ message: d.restored === 1 ? "1 sample connection restored" : `${d.restored} sample connections restored`, color: "green" });
+    } catch (e) { notifications.show({ title: "Could not restore", message: e.message, color: "red" }); }
+  }, [refresh]);
+  const requestDelete = useCallback((conn) => {
+    confirmDelete(conn, () => {
+      location.hash = "#home";
+      refresh();
+      notifications.show({ message: `${conn.name} deleted`, color: "green" });
+    });
+  }, [refresh]);
+  const onSaved = useCallback(async (c) => {
+    addHandlers.close();
     await refresh();
-    toast(`${name} deleted`, "success");
-  };
+    location.hash = connHref(c.id);
+    notifications.show({ message: `${c.name} added`, color: "green" });
+  }, [refresh, addHandlers]);
+
+  const value = useMemo(() => ({ ...data, openAdd, requestDelete, restore, sidebarOpen, toggleSidebar }),
+    [data, openAdd, requestDelete, restore, sidebarOpen, toggleSidebar]);
+  const onNavigate = useCallback(() => { if (mobile) mobileHandlers.close(); }, [mobile, mobileHandlers]);
+
+  let page;
+  if (route.page === "highlights") page = <HighlightsPage />;
+  else if (route.page === "c") {
+    page = cur ? <ConnectionPage key={cur.id} conn={cur} route={route} /> : conns === null ? null : (
+      <Center py={80}>
+        <Stack align="center" gap="sm" maw={420} ta="center">
+          <ThemeIcon variant="light" color="gray" size={64} radius="xl"><IconPlugConnectedX size={32} stroke={1.4} aria-hidden="true" /></ThemeIcon>
+          <Title order={2} size="h3">We could not find that connection</Title>
+          <Text c="dimmed">It may have been deleted. Pick another one from the sidebar.</Text>
+          <Button component="a" href="#home" variant="default">Go to your data</Button>
+        </Stack>
+      </Center>
+    );
+  } else page = <HomePage />;
 
   return (
-    <div className="app">
-      <a className="skip" href="#main" onClick={(e) => { e.preventDefault(); mainRef.current?.focus(); }}>Skip to content</a>
-      <header className="top">
-        <div className="top-left">
-          <button type="button" className="icon-btn" onClick={() => setRailOpen((o) => !o)} aria-expanded={railOpen} aria-controls="rail"
-            aria-label={railOpen ? "Close sidebar" : "Open sidebar"} title={railOpen ? "Close sidebar" : "Open sidebar"}>
-            <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2.5" y="3.5" width="15" height="13" rx="3" />
-              <path d="M7.5 3.5v13" />
-              {railOpen ? <path d="M13.2 8.2 11.4 10l1.8 1.8" /> : <path d="M11.4 8.2 13.2 10l-1.8 1.8" />}
-            </svg>
-          </button>
-          <a href="#home" className="brand" translate="no"><Logo size={26} /><span>OpenETL <b>Lens</b></span></a>
-        </div>
-        <a href="#highlights" className="top-link" aria-current={route.page === "highlights" ? "page" : undefined}>Highlights</a>
-      </header>
-      <div className={railOpen ? "shell" : "shell rail-closed"}>
-        {railOpen && <Sidebar conns={conns} error={connErr} route={route} statusOf={statusOf} onAdd={() => setAdding(true)} />}
-        <main id="main" ref={mainRef} tabIndex={-1} data-scope={cur ? cur.type : undefined} className={cur ? "main scoped" : "main"}>
-          {route.page === "home" && <Home conns={conns} ov={ov} ovErr={ovErr} statusOf={statusOf} onAdd={() => setAdding(true)} hiddenDefaults={hiddenDefaults} onRestore={restore} />}
-          {route.page === "highlights" && <Highlights />}
-          {route.page === "c" && conns === null && <p className="note pad" role="status">Loading…</p>}
-          {route.page === "c" && conns && !cur && (
-            <div className="page"><h1>Connection not found</h1><p className="muted">There is no connection called <span className="mono" translate="no">{route.id}</span>. Pick one from the list, or <a href="#home">go back to your data</a>.</p></div>
-          )}
-          {cur && <ConnectionView key={cur.id} conn={cur} route={route} onDelete={setDeleting} />}
-        </main>
-      </div>
-      <AddConnectionDialog open={adding} onClose={() => setAdding(false)} onSaved={onSaved} />
-      {deleting && <DeleteConnectionDialog connection={deleting} onClose={() => setDeleting(null)} onDeleted={onDeleted} />}
-    </div>
+    <AppContext.Provider value={value}>
+      <AppShell padding="md" navbar={{ width: 288, breakpoint: "sm", collapsed: { desktop: !desktopOpen, mobile: !mobileOpen } }}>
+        <Navbar route={route} onNavigate={onNavigate} />
+        <AppShell.Main id="main">
+          {!sidebarOpen && <LogoToggle open={false} onToggle={toggleSidebar} fixed />}
+          <Box pl={sidebarOpen ? 0 : { base: 0, sm: 44 }} pt={sidebarOpen ? 0 : { base: 44, sm: 0 }}>{page}</Box>
+        </AppShell.Main>
+      </AppShell>
+      <SearchPalette route={route} />
+      <AddDataModal opened={addOpen} onClose={addHandlers.close} onSaved={onSaved} />
+    </AppContext.Provider>
   );
-}
-
-export default function App() {
-  return <ToastProvider><Shell /></ToastProvider>;
 }

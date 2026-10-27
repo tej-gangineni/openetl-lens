@@ -61,12 +61,7 @@ Each row from `items` also carries a hidden string `__ref` (never listed in `col
 `GET /api/insights` -> computed from the built-in lab stores only; each part fails independently (`{error}`) and scans at most 2,000 Qdrant points.
 
 ## Web UI behaviour (React)
-- Routes by hash: `#overview`, `#c/<connectionId>`, `#add`. A left rail lists connections (status dot, name, type) plus "Add connection".
-- Browsing uses infinite scroll: page size 100, an IntersectionObserver sentinel loads the next page, only one request in flight, in-flight requests are aborted when
-  the container or search text changes, search is debounced 300 ms.
-- The DOM is bounded: at most 3,000 rows are mounted; at that point stop auto-loading and show a button "Load the next 1,000 (the first 1,000 leave the view)".
-  Rows use `content-visibility: auto` with an intrinsic size so scrolling stays smooth.
-- Columns are generic: show the first 8, long text is clamped to 2 lines; clicking a row opens a detail panel with every field. If a field holds a markdown table
-  (OpenETL stores CSV that way), parse it and draw the line charts as the current Detail.jsx does.
-- A relata connection also shows the SQL console (calls `/api/c/:id/query`).
-- Show the total as "1,234 rows" or "at least 10,001 rows" when `totalCapped`. Never block the page on a slow store: show a spinner per panel and the server's `error` text on failure.
+The screens, layout and UX rules are in `.claude/skills/lens-ui/SKILL.md`. What matters for the API:
+- Browsing uses infinite scroll: page size 100, one request in flight, stale requests aborted, search debounced 300 ms, and at most 3,000 rows mounted (then a "Load the next 1,000" button).
+- Show the total as "1,234 rows" or "at least 10,001 rows" when `totalCapped`. Never block the page on a slow store: skeletons per panel, and the server's `error` text with a Retry on failure.
+- Columns are generic (first 8 shown, the rest in the row drawer). A value cut at 2,000 characters is completed with `GET /api/c/:id/row`.
