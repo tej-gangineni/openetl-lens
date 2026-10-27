@@ -84,7 +84,7 @@ app.post("/api/c/:id/query", h(async (req) => {
 
 /* ---- overview */
 const probe = (c) => {
-  const base = { id: c.id, name: c.name, kind: TYPES[c.type].kind, url: TYPES[c.type].endpoint(c.config) };
+  const base = { id: c.id, name: c.name, type: c.type, kind: TYPES[c.type].kind, url: TYPES[c.type].endpoint(c.config) };
   let timer;
   const limit = new Promise((_, rej) => { timer = setTimeout(() => rej(new HttpError(504, "No answer within 4 seconds.")), 4000); });
   return Promise.race([handleFor(c).containers({ counts: true }), limit])
@@ -101,7 +101,10 @@ app.get("/api/insights", h(async () => {
   const byValueDesc = (x, y) => y.value - x.value;
   const largest = up.flatMap((p) => p.containers.filter((c) => c.count != null).map((c) => ({ label: c.name, group: p.name, value: c.count })))
     .sort(byValueDesc).slice(0, 12);
+  const top = (p) => p.containers.filter((c) => c.count != null).sort((x, y) => y.count - x.count).slice(0, 5).map((c) => ({ label: c.name, value: c.count }));
   return {
+    connections: probes.map((p) => ({ id: p.id, name: p.name, type: p.type, ok: p.ok, tables: p.containers.length,
+      records: p.containers.reduce((n, c) => n + (c.count || 0), 0), top: top(p), error: p.ok ? undefined : p.error })),
     records: up.map((p) => ({ label: p.name, value: p.containers.reduce((n, c) => n + (c.count || 0), 0) })).sort(byValueDesc),
     tables: up.map((p) => ({ label: p.name, value: p.containers.length })).sort(byValueDesc),
     largest,

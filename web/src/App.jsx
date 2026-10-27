@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AppShell, Box, Button, Center, Divider, Kbd, NavLink, ScrollArea, SegmentedControl, Stack, Text, ThemeIcon, Title, useMantineColorScheme } from "@mantine/core";
+import { ActionIcon, AppShell, Box, Button, Center, Divider, Indicator, Kbd, NavLink, ScrollArea, SegmentedControl, Stack, Text, ThemeIcon, Title, Tooltip, UnstyledButton, useMantineColorScheme } from "@mantine/core";
 import { useDisclosure, useHotkeys, useLocalStorage, useMediaQuery } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { spotlight } from "@mantine/spotlight";
 import { IconChartBar, IconDeviceDesktop, IconMoon, IconPlus, IconSearch, IconSun, IconPlugConnectedX } from "@tabler/icons-react";
 import { AppContext, useApp } from "./AppContext.jsx";
 import { useConnections } from "./useConnections.js";
-import LogoToggle, { MOD } from "./LogoToggle.jsx";
+import SidebarHeader, { MOD, SidebarToggle } from "./SidebarHeader.jsx";
+import TypeIcon from "./TypeIcon.jsx";
 import NavTree from "./NavTree.jsx";
 import SearchPalette from "./SearchPalette.jsx";
 import HomePage from "./HomePage.jsx";
@@ -16,17 +17,56 @@ import AddDataModal from "./AddDataModal.jsx";
 import { confirmDelete } from "./confirmDelete.js";
 import { api } from "./api.js";
 import { parseHash, connHref } from "./nav.js";
+import Logo from "./Logo.jsx";
 
 const lastTableKey = (id) => `lens.table.${id}`;
 const remembered = (id) => { try { return localStorage.getItem(lastTableKey(id)); } catch { return null; } };
 const remember = (id, table) => { try { localStorage.setItem(lastTableKey(id), table); } catch { /* storage blocked */ } };
+
+function Rail({ route }) {
+  const { conns, status, openAdd, sidebarOpen, toggleSidebar } = useApp();
+  const { colorScheme, setColorScheme } = useMantineColorScheme();
+  const next = { light: "dark", dark: "auto", auto: "light" }[colorScheme];
+  const ThemeGlyph = { light: IconSun, dark: IconMoon, auto: IconDeviceDesktop }[colorScheme];
+  const DOT = { up: "green", down: "red", unknown: "gray" };
+  return (
+    <AppShell.Navbar id="lens-sidebar" py="md" px={0} aria-label="Sidebar">
+      <Stack align="center" gap="sm" h="100%">
+        <UnstyledButton component="a" href="#home" aria-label="OpenETL Lens, home"><Logo size={30} /></UnstyledButton>
+        <SidebarToggle open={sidebarOpen} onToggle={toggleSidebar} />
+        <Tooltip label="Add data" position="right"><ActionIcon size="lg" onClick={openAdd} aria-label="Add data"><IconPlus size={18} /></ActionIcon></Tooltip>
+        <Divider w="60%" />
+        <ScrollArea type="never" flex={1} w="100%">
+          <Stack align="center" gap="xs">
+            {conns?.map((c) => (
+              <Tooltip key={c.id} label={c.name} position="right">
+                <UnstyledButton component="a" href={connHref(c.id)} aria-label={c.name} aria-current={route.page === "c" && route.id === c.id ? "page" : undefined}
+                  bdrs="md" p={2} bd={route.page === "c" && route.id === c.id ? "2px solid var(--mantine-primary-color-filled)" : "2px solid transparent"}>
+                  <Indicator color={DOT[status(c.id)]} size={9} offset={3} position="bottom-end" withBorder><TypeIcon type={c.type} size={30} /></Indicator>
+                </UnstyledButton>
+              </Tooltip>
+            ))}
+          </Stack>
+        </ScrollArea>
+        <Tooltip label="Highlights" position="right">
+          <ActionIcon component="a" href="#highlights" size="lg" variant={route.page === "highlights" ? "light" : "subtle"} color={route.page === "highlights" ? undefined : "gray"} aria-label="Highlights">
+            <IconChartBar size={20} stroke={1.6} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label={`Theme: ${colorScheme}. Switch to ${next}`} position="right">
+          <ActionIcon size="lg" variant="subtle" color="gray" onClick={() => setColorScheme(next)} aria-label={`Color theme: ${colorScheme}. Switch to ${next}`}><ThemeGlyph size={18} /></ActionIcon>
+        </Tooltip>
+      </Stack>
+    </AppShell.Navbar>
+  );
+}
 
 function Navbar({ route, onNavigate }) {
   const { openAdd, sidebarOpen, toggleSidebar } = useApp();
   const { colorScheme, setColorScheme } = useMantineColorScheme();
   return (
     <AppShell.Navbar id="lens-sidebar" p="md" aria-label="Sidebar">
-      <AppShell.Section mb="md"><LogoToggle open={sidebarOpen} onToggle={toggleSidebar} wordmark /></AppShell.Section>
+      <AppShell.Section mb="md"><SidebarHeader open={sidebarOpen} onToggle={toggleSidebar} /></AppShell.Section>
       <AppShell.Section>
         <Stack gap="xs">
           <Button fullWidth size="md" leftSection={<IconPlus size={18} />} onClick={() => { onNavigate(); openAdd(); }}>Add data</Button>
@@ -134,11 +174,11 @@ export default function App() {
 
   return (
     <AppContext.Provider value={value}>
-      <AppShell padding="md" navbar={{ width: 288, breakpoint: "sm", collapsed: { desktop: !desktopOpen, mobile: !mobileOpen } }}>
-        <Navbar route={route} onNavigate={onNavigate} />
+      <AppShell padding="md" navbar={{ width: desktopOpen || mobile ? 288 : 68, breakpoint: "sm", collapsed: { mobile: !mobileOpen } }}>
+        {mobile || desktopOpen ? <Navbar route={route} onNavigate={onNavigate} /> : <Rail route={route} />}
         <AppShell.Main id="main">
-          {!sidebarOpen && <LogoToggle open={false} onToggle={toggleSidebar} fixed />}
-          <Box pl={sidebarOpen ? 0 : { base: 0, sm: 44 }} pt={sidebarOpen ? 0 : { base: 44, sm: 0 }}>{page}</Box>
+          {mobile && !mobileOpen && <Box pb="sm"><SidebarToggle open={false} onToggle={toggleSidebar} tooltipPosition="bottom" /></Box>}
+          {page}
         </AppShell.Main>
       </AppShell>
       <SearchPalette route={route} />
