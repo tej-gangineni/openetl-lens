@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Alert, Button, Center, Flex, Group, Highlight, ScrollArea, Skeleton, Stack, Table, Text } from "@mantine/core";
+import { Alert, Button, Center, Checkbox, Flex, Group, Highlight, ScrollArea, Skeleton, Stack, Table, Text, UnstyledButton } from "@mantine/core";
 import { useIntersection } from "@mantine/hooks";
-import { IconAlertCircle, IconSearchOff } from "@tabler/icons-react";
+import { IconAlertCircle, IconArrowDown, IconArrowUp, IconSearchOff, IconSelector } from "@tabler/icons-react";
 import { cellText } from "./api.js";
 import { MAX_ROWS } from "./useRows.js";
 
 const nf = new Intl.NumberFormat("en-US");
 const ID_COL = /(^|_)id$|^_id$|uuid|^ref$/i;
 
-const Row = React.memo(function Row({ item, cols, numeric, q, onOpen, selected }) {
+const Row = React.memo(function Row({ item, cols, numeric, q, onOpen, selected, checkable, checked, onCheck }) {
   const open = (el) => onOpen(item, el);
   return (
     <Table.Tr
@@ -22,6 +22,11 @@ const Row = React.memo(function Row({ item, cols, numeric, q, onOpen, selected }
         else if (e.key === "ArrowUp") { e.preventDefault(); e.currentTarget.previousElementSibling?.focus?.(); }
       }}
     >
+      {checkable && (
+        <Table.Td w={40} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} valign="top">
+          <Checkbox size="xs" checked={checked} onChange={() => onCheck(item.k)} aria-label="Select this row" />
+        </Table.Td>
+      )}
       {cols.map((c) => {
         const v = item.r[c];
         const empty = v === null || v === undefined || v === "";
@@ -43,9 +48,10 @@ const Row = React.memo(function Row({ item, cols, numeric, q, onOpen, selected }
   );
 });
 
-function SkeletonRows({ cols, n }) {
+function SkeletonRows({ cols, n, extra = false }) {
   return Array.from({ length: n }, (_, i) => (
     <Table.Tr key={`sk${i}`} aria-hidden="true">
+      {extra && <Table.Td />}
       {cols.map((c) => <Table.Td key={c}><Skeleton h={14} w={`${55 + ((i * 17 + c.length * 7) % 40)}%`} /></Table.Td>)}
     </Table.Tr>
   ));
@@ -55,7 +61,11 @@ function SkeletonRows({ cols, n }) {
 export default function DataGrid({
   label, items, columns, numeric, q = "", loading, error, done, dropped = 0, resetKey,
   onLoadMore, onRetry, onDropFirst, onOpen, selectedKey, emptyText,
+  sort = null, onSort, sortable = false, checked, onCheck, onCheckAll,
 }) {
+  const checkable = !!checked;
+  const allChecked = checkable && items.length > 0 && items.every((it) => checked.has(it.k));
+  const someChecked = checkable && !allChecked && items.some((it) => checked.has(it.k));
   const [viewport, setViewport] = useState(null);
   const paused = items.length >= MAX_ROWS;
   const canLoad = !done && !paused && !loading && !error && items.length > 0;
@@ -76,18 +86,38 @@ export default function DataGrid({
         <Table stickyHeader highlightOnHover withRowBorders aria-label={label} aria-busy={loading || undefined}>
           <Table.Thead>
             <Table.Tr>
-              {columns.map((c) => (
-                <Table.Th key={c} ta={numeric.has(c) ? "right" : "left"} miw={numeric.has(c) ? 70 : 90} title={c}>
-                  <Text size="xs" fw={600} c="dimmed" truncate="end">{c}</Text>
+              {checkable && (
+                <Table.Th w={40}>
+                  <Checkbox size="xs" checked={allChecked} indeterminate={someChecked} onChange={onCheckAll} disabled={!items.length}
+                    aria-label={allChecked ? "Clear the selection" : `Select the ${items.length} loaded rows`} />
                 </Table.Th>
-              ))}
+              )}
+              {columns.map((c) => {
+                const on = sort?.col === c, dir = on ? sort.dir : null;
+                const Icon = dir === "asc" ? IconArrowUp : dir === "desc" ? IconArrowDown : IconSelector;
+                return (
+                  <Table.Th key={c} ta={numeric.has(c) ? "right" : "left"} miw={numeric.has(c) ? 70 : 90} title={c}
+                    aria-sort={dir === "asc" ? "ascending" : dir === "desc" ? "descending" : undefined}>
+                    {sortable && onSort ? (
+                      <UnstyledButton onClick={() => onSort(c)} aria-label={`Sort by ${c}${on ? (dir === "asc" ? ", now ascending" : ", now descending") : ""}`} maw="100%">
+                        <Group gap={4} wrap="nowrap" justify={numeric.has(c) ? "flex-end" : "flex-start"}>
+                          <Text size="xs" fw={600} c={on ? undefined : "dimmed"} truncate="end">{c}</Text>
+                          <Icon size={13} stroke={on ? 2.4 : 1.6} color={on ? "var(--mantine-primary-color-filled)" : "var(--mantine-color-dimmed)"} aria-hidden="true" />
+                        </Group>
+                      </UnstyledButton>
+                    ) : (
+                      <Text size="xs" fw={600} c="dimmed" truncate="end">{c}</Text>
+                    )}
+                  </Table.Th>
+                );
+              })}
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {items.map((it) => <Row key={it.k} item={it} cols={columns} numeric={numeric} q={q} onOpen={onOpen} selected={selectedKey === it.k} />)}
-            {firstLoad && <SkeletonRows cols={columns.length ? columns : ["a", "b", "c", "d"]} n={10} />}
-            {loading && items.length > 0 && <SkeletonRows cols={columns} n={2} />}
-            {canLoad && <Table.Tr key={`s${items.length}`} ref={sentinelRef} aria-hidden="true"><Table.Td colSpan={Math.max(1, columns.length)} p={0} h={1} bd="none" /></Table.Tr>}
+            {items.map((it) => <Row key={it.k} item={it} cols={columns} numeric={numeric} q={q} onOpen={onOpen} selected={selectedKey === it.k} checkable={checkable} checked={checkable && checked.has(it.k)} onCheck={onCheck} />)}
+            {firstLoad && <SkeletonRows cols={columns.length ? columns : ["a", "b", "c", "d"]} n={10} extra={checkable} />}
+            {loading && items.length > 0 && <SkeletonRows cols={columns} n={2} extra={checkable} />}
+            {canLoad && <Table.Tr key={`s${items.length}`} ref={sentinelRef} aria-hidden="true"><Table.Td colSpan={Math.max(1, columns.length + (checkable ? 1 : 0))} p={0} h={1} bd="none" /></Table.Tr>}
           </Table.Tbody>
         </Table>
         {empty && (

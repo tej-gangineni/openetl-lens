@@ -25,10 +25,12 @@ function readFile() {
 }
 const readUser = () => (Array.isArray(readFile().connections) ? readFile().connections.filter((c) => c && c.id && TYPES[c.type]) : []);
 const readHidden = () => (Array.isArray(readFile().hidden) ? readFile().hidden.filter((x) => typeof x === "string") : []);
-function writeFileState(list, hidden) {
-  if (!list.length && !hidden.length) { try { fs.unlinkSync(FILE); } catch {} return; }
+// ids of the connections where deleting rows has been switched on (off by default)
+const readWritable = () => (Array.isArray(readFile().writable) ? readFile().writable.filter((x) => typeof x === "string") : []);
+function writeFileState(list, hidden, writable = readWritable()) {
+  if (!list.length && !hidden.length && !writable.length) { try { fs.unlinkSync(FILE); } catch {} return; }
   const tmp = FILE + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify({ connections: list, hidden }, null, 2), { mode: 0o600 });
+  fs.writeFileSync(tmp, JSON.stringify({ connections: list, hidden, writable }, null, 2), { mode: 0o600 });
   fs.chmodSync(tmp, 0o600);
   fs.renameSync(tmp, FILE);
 }
@@ -44,7 +46,13 @@ export function mustFind(id) {
 }
 export const secrets = (c) => [c.config?.password, c.config?.token, c.config?.apiKey, (() => { try { return decodeURIComponent(new URL(c.config?.url).password); } catch { return ""; } })()].filter(Boolean);
 
-export const publicView = (c) => ({ id: c.id, name: c.name, type: c.type, summary: `${c.type} @ ${TYPES[c.type].endpoint(c.config)}`, builtin: !!c.builtin });
+export const isWritable = (id) => readWritable().includes(id);
+export function setWritable(id, on) {
+  if (!find(id)) throw new HttpError(404, "There is no connection with that id.");
+  const rest = readWritable().filter((x) => x !== id);
+  writeFileState(readUser(), readHidden(), on ? [...rest, id] : rest);
+}
+export const publicView = (c) => ({ id: c.id, name: c.name, type: c.type, summary: `${c.type} @ ${TYPES[c.type].endpoint(c.config)}`, builtin: !!c.builtin, writable: isWritable(c.id) });
 
 const str = (v, what, { required = true, max = 2000 } = {}) => {
   if (v === undefined || v === null || v === "") { if (required) throw bad(`${what} is required.`); return ""; }
@@ -97,8 +105,9 @@ export function addUser(v) {
 export function removeConnection(id) {
   const c = find(id);
   if (!c) throw new HttpError(404, "There is no connection with that id.");
-  if (c.builtin) writeFileState(readUser(), [...new Set([...readHidden(), id])]);
-  else writeUser(readUser().filter((x) => x.id !== id));
+  const writable = readWritable().filter((x) => x !== id);
+  if (c.builtin) writeFileState(readUser(), [...new Set([...readHidden(), id])], writable);
+  else writeFileState(readUser().filter((x) => x.id !== id), readHidden(), writable);
 }
 export function restoreDefaults() {
   const n = hiddenCount();
@@ -108,14 +117,15 @@ export function restoreDefaults() {
 
 // handle cache: one open pool/client per connection
 const handles = new Map();
-export function handleFor(conn) {
-  const key = JSON.stringify(conn.config);
-  const hit = handles.get(conn.id);
+// { write: true } opens the separate handle that can delete rows; the normal handle stays read only
+export function handleFor(conn, { write = false } = {}) {
+  const key = JSON.stringify(conn.config), slot = write ? conn.id + ":w" : conn.id;
+  const hit = handles.get(slot);
   if (hit && hit.key === key) return hit.handle;
   if (hit) hit.handle.close();
-  const handle = TYPES[conn.type].open(conn.config);
-  handles.set(conn.id, { key, handle });
+  const handle = TYPES[conn.type].open(conn.config, { write });
+  handles.set(slot, { key, handle });
   return handle;
 }
-export function dropHandle(id) { const h = handles.get(id); if (h) { handles.delete(id); h.handle.close(); } }
+export function dropHandle(id) { for (const slot of [id, id + ":w"]) { const h = handles.get(slot); if (h) { handles.delete(slot); h.handle.close(); } } }
 export function closeAll() { for (const [, h] of handles) h.handle.close(); handles.clear(); }

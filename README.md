@@ -32,3 +32,7 @@ The full record behind a cut-off row is fetched on demand when you open it.
 Downloaded from the internet on 2026-10-27 and adapted with a short "OpenETL Lens notes" block each. `UPSTREAM.txt` in each skill names the source, commit and licence. The verbatim originals are not committed: run `scripts/fetch-skills.sh` to download them into each skill's `upstream/` folder.
 `frontend-design` (Anthropic, Apache-2.0), `web-design-guidelines` (Vercel, no licence stated, local guidance only), `react-best-practices` and `composition-patterns` (Vercel, MIT), `mantine-form` (mantinedev, MIT), `ux-principles` (notes only), `mantine-ui` (ours; its `docs/` are fetched by `scripts/fetch-skills.sh`).
 `lens-ui` is our own skill that ties them to this app.
+
+## Sorting and deleting rows
+Click a column heading to sort by it (ascending, descending, back to the stored order). Qdrant cannot sort on the server, so its headings stay plain.
+Deleting is **off for every connection**. Open the connection menu, choose "Allow deleting rows", confirm, then tick rows in any table and press Delete. A delete cannot be undone. Turn it off from the same menu. Details are in `API_CONTRACT.md`.

@@ -1,6 +1,9 @@
 // One adapter per store type. open(config) returns a handle:
 //   containers({counts}) -> [{name,count}]    items({container,q,limit,cursor}) -> response body    close()
-// Everything here is read only and bounded (timeouts, limit, offset caps, capped counts).
+// Reads are bounded (timeouts, limit, offset caps, capped counts). open(config, {write:true}) returns a handle that can also
+// remove(refs): it is only ever opened for the explicit, per-connection delete switch.
+const FIELD = /^[A-Za-z_][A-Za-z0-9_.\-]{0,99}$/;
+const dirOf = (d) => (String(d).toLowerCase() === "desc" ? "desc" : "asc");
 import pg from "pg";
 import { MongoClient, ObjectId } from "mongodb";
 import {
@@ -18,7 +21,7 @@ const endpoint = (s) => { try { const u = new URL(s); return u.host; } catch { r
 const sanitizeQ = (q) => String(q || "").slice(0, 200);
 
 /* ---------------------------------------------------------------- PostgreSQL */
-function openPostgres(cfg) {
+function openPostgres(cfg, { write = false } = {}) {
   const u = parseUrl(cfg.url, "PostgreSQL");
   const sslmode = u.searchParams.get("sslmode");
   const pool = new pg.Pool({
@@ -26,7 +29,7 @@ function openPostgres(cfg) {
     database: decodeURIComponent(u.pathname.slice(1)) || undefined,
     ssl: sslmode && sslmode !== "disable" ? { rejectUnauthorized: false } : undefined,
     max: 3, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 4000, statement_timeout: 5000, query_timeout: 6000,
-    options: "-c default_transaction_read_only=on -c statement_timeout=5000",
+    options: `${write ? "" : "-c default_transaction_read_only=on "}-c statement_timeout=5000`,
   });
   pool.on("error", () => {});
   const capCount = async (from, params = []) =>
@@ -46,7 +49,7 @@ function openPostgres(cfg) {
         } catch { return { name: r.name, count: null }; }
       });
     },
-    async items({ container, q, limit, cursor }) {
+    async items({ container, q, limit, cursor, sort, dir }) {
       const offset = offsetFrom(cursor);
       const colsRes = (await pool.query(
         `select column_name, data_type from information_schema.columns where table_schema='public' and table_name=$1 order by ordinal_position limit ${MAX_COLS}`, [container])).rows;
@@ -57,15 +60,17 @@ function openPostgres(cfg) {
          where i.indrelid=$1::regclass and i.indisprimary order by array_position(i.indkey::int2[], a.attnum)`, [tbl])).rows.map((r) => r.attname);
       const sel = colsRes.map((c) => NUMERIC.has(c.data_type) ? quoteIdent(c.column_name) : `left(${quoteIdent(c.column_name)}::text, 2001) as ${quoteIdent(c.column_name)}`).join(", ");
       const where = q ? "where t::text ilike $1" : "", params = q ? [`%${escapeLike(q)}%`] : [];
-      const order = pk.length ? pk.map(quoteIdent).join(", ") : "ctid";
+      const tie = pk.length ? pk.map(quoteIdent).join(", ") : "ctid";
+      const sc = sort && colsRes.find((c) => c.column_name === sort), d = dirOf(dir);
+      const order = sc ? `${quoteIdent(sc.column_name)} ${d} nulls last, ${tie}` : tie;
       if (offset > OFFSET_CAP) return { columns: colsRes.map((c) => c.column_name), rows: [], total: null, totalCapped: false, next: null };
       const total = await capCount(`${tbl} t ${where}`, params);
-      const raw = (await pool.query(`select ${sel} from ${tbl} t ${where} order by ${order} limit ${limit + 1} offset ${offset}`, params)).rows;
+      const raw = (await pool.query(`select ${sel} from ${tbl} t ${where} order by ${order} limit ${limit + 1} offset ${offset}`, params).catch((e) => { if (e.code === "42883") throw bad(`PostgreSQL cannot sort by "${sort}".`); throw e; })).rows;
       const page = raw.slice(0, limit), s = shape(page);
       const more = raw.length > limit || s.rows.length < page.length;
       const nOff = offset + s.rows.length;
-      s.rows.forEach((r, i) => { r.__ref = encodeCursor(pk.length === 1 ? { k: pk[0], v: String(page[i][pk[0]]) } : { o: offset + i, q: q || "" }); });
-      return { columns: s.columns, rows: s.rows, total: Math.min(total, COUNT_CAP), totalCapped: total >= COUNT_CAP, next: more && nOff <= OFFSET_CAP ? encodeCursor({ o: nOff }) : null };
+      s.rows.forEach((r, i) => { r.__ref = encodeCursor(pk.length === 1 ? { k: pk[0], v: String(page[i][pk[0]]) } : { o: offset + i, q: q || "", s: sc ? sc.column_name : "", d }); });
+      return { sortable: true, columns: s.columns, rows: s.rows, total: Math.min(total, COUNT_CAP), totalCapped: total >= COUNT_CAP, next: more && nOff <= OFFSET_CAP ? encodeCursor({ o: nOff }) : null };
     },
     // the whole record behind a row (no truncation)
     async row({ container, ref }) {
@@ -79,14 +84,27 @@ function openPostgres(cfg) {
       if (!Number.isInteger(r.o) || r.o < 0 || r.o > OFFSET_CAP) throw bad("That reference is not valid.");
       const pk = (await pool.query(`select a.attname from pg_index i join pg_attribute a on a.attrelid=i.indrelid and a.attnum=any(i.indkey) where i.indrelid=$1::regclass and i.indisprimary order by array_position(i.indkey::int2[], a.attnum)`, [tbl])).rows.map((x) => x.attname);
       const where = r.q ? "where t::text ilike $1" : "";
-      return fullRow((await pool.query(`select * from ${tbl} t ${where} order by ${pk.length ? pk.map(quoteIdent).join(", ") : "ctid"} limit 1 offset ${r.o}`, r.q ? [`%${escapeLike(r.q)}%`] : [])).rows[0]);
+      const tie = pk.length ? pk.map(quoteIdent).join(", ") : "ctid", srt = r.s && cols.includes(r.s) ? `${quoteIdent(r.s)} ${dirOf(r.d)} nulls last, ` : "";
+      return fullRow((await pool.query(`select * from ${tbl} t ${where} order by ${srt}${tie} limit 1 offset ${r.o}`, r.q ? [`%${escapeLike(r.q)}%`] : [])).rows[0]);
+    },
+    // delete rows by primary key; tables without a single-column primary key cannot be deleted from safely
+    async remove({ container, refs }) {
+      if (!write) throw bad("This handle is read only.");
+      const cols = (await pool.query("select column_name from information_schema.columns where table_schema='public' and table_name=$1", [container])).rows;
+      if (!cols.length) throw bad(`There is no table called "${container}".`);
+      const tbl = `public.${quoteIdent(container)}`;
+      const pk = (await pool.query(`select a.attname from pg_index i join pg_attribute a on a.attrelid=i.indrelid and a.attnum=any(i.indkey) where i.indrelid=$1::regclass and i.indisprimary`, [tbl])).rows.map((x) => x.attname);
+      if (pk.length !== 1) throw bad("This table has no single-column primary key, so its rows cannot be deleted safely.");
+      const vals = refs.map(decodeCursor).map((r) => { if (!r || r.k !== pk[0]) throw bad("That reference cannot be deleted."); return String(r.v); });
+      const res = await pool.query(`delete from ${tbl} where ${quoteIdent(pk[0])}::text = any($1::text[])`, [vals]);
+      return { deleted: res.rowCount };
     },
     close: () => pool.end().catch(() => {}),
   };
 }
 
 /* ---------------------------------------------------------------- MongoDB */
-function openMongodb(cfg) {
+function openMongodb(cfg, { write = false } = {}) {
   if (!cfg.database) throw bad("A MongoDB database name is required.");
   const client = new MongoClient(cfg.url, { serverSelectionTimeoutMS: 3000, connectTimeoutMS: 3000, socketTimeoutMS: 8000, maxPoolSize: 3, appName: "openetl-lens" });
   let ready;
@@ -104,7 +122,7 @@ function openMongodb(cfg) {
         try { return { name, count: await d.collection(name).estimatedDocumentCount(MAXT) }; } catch { return { name, count: null }; }
       });
     },
-    async items({ container, q, limit, cursor }) {
+    async items({ container, q, limit, cursor, sort, dir }) {
       if (!NAME.test(container)) throw bad("That is not a valid collection name.");
       const offset = offsetFrom(cursor), d = await db();
       if (!(await d.listCollections({ name: container }, { nameOnly: true }).toArray()).length) throw bad(`There is no collection called "${container}".`);
@@ -117,12 +135,20 @@ function openMongodb(cfg) {
         filter = fields.length ? { $or: fields.map((f) => ({ [f]: { $regex: escapeRegex(q), $options: "i" } })) } : { _id: { $in: [] } };
       }
       const total = await col.countDocuments(filter, { limit: COUNT_CAP, ...MAXT });
-      const raw = await col.aggregate([{ $match: filter }, { $sort: { _id: 1 } }, { $skip: offset }, { $limit: limit + 1 }, trunc], MAXT).toArray();
+      const raw = await col.aggregate([{ $match: filter }, { $sort: sort && FIELD.test(sort) && sort !== "_id" ? { [sort]: dirOf(dir) === "desc" ? -1 : 1, _id: 1 } : { _id: dirOf(dir) === "desc" && sort === "_id" ? -1 : 1 } }, { $skip: offset }, { $limit: limit + 1 }, trunc], MAXT).toArray();
       const page = raw.slice(0, limit), s = shape(page);
       const more = raw.length > limit || s.rows.length < page.length;
       const nOff = offset + s.rows.length;
       s.rows.forEach((r, i) => { r.__ref = encodeCursor({ v: String(page[i]._id) }); });
-      return { columns: s.columns, rows: s.rows, total, totalCapped: total >= COUNT_CAP, next: more && nOff <= OFFSET_CAP ? encodeCursor({ o: nOff }) : null };
+      return { sortable: true, columns: s.columns, rows: s.rows, total, totalCapped: total >= COUNT_CAP, next: more && nOff <= OFFSET_CAP ? encodeCursor({ o: nOff }) : null };
+    },
+    async remove({ container, refs }) {
+      if (!write) throw bad("This handle is read only.");
+      if (!NAME.test(container)) throw bad("That is not a valid collection name.");
+      const ids = [];
+      for (const ref of refs) { const v = String(decodeCursor(ref)?.v ?? ""); if (!v) throw bad("That reference cannot be deleted."); ids.push(v); if (/^[0-9a-f]{24}$/i.test(v)) ids.push(new ObjectId(v)); }
+      const res = await (await db()).collection(container).deleteMany({ _id: { $in: ids } });
+      return { deleted: res.deletedCount };
     },
     async row({ container, ref }) {
       if (!NAME.test(container)) throw bad("That is not a valid collection name.");
@@ -136,30 +162,32 @@ function openMongodb(cfg) {
 }
 
 /* ---------------------------------------------------------------- ClickHouse */
-function openClickhouse(cfg) {
+function openClickhouse(cfg, { write = false } = {}) {
   const base = parseUrl(cfg.url, "ClickHouse");
   const database = cfg.database || "default";
-  async function q(sql, params = {}) {
+  async function q(sql, params = {}, { mutate = false } = {}) {
     const u = new URL(base);
-    u.searchParams.set("database", database); u.searchParams.set("readonly", "2"); u.searchParams.set("max_execution_time", "5");
+    u.searchParams.set("database", database); u.searchParams.set("readonly", mutate ? "0" : "2"); u.searchParams.set("max_execution_time", mutate ? "30" : "5");
     u.searchParams.set("output_format_json_quote_64bit_integers", "0");
     for (const [k, v] of Object.entries(params)) u.searchParams.set("param_" + k, String(v));
     const headers = { "X-ClickHouse-User": cfg.user || "default" };
     if (cfg.password) headers["X-ClickHouse-Key"] = cfg.password;
-    const r = await http(u, { method: "POST", body: sql + " FORMAT JSON", headers, timeout: 7000 });
+    const r = await http(u, { method: "POST", body: mutate ? sql : sql + " FORMAT JSON", headers, timeout: mutate ? 35_000 : 7000 });
     if (!r.ok) {
       if (/Code: 159|TIMEOUT_EXCEEDED/.test(r.text)) throw new HttpError(504, "The store took too long to answer (limit is 5 seconds).");
       throw new HttpError(/Code: (60|81)\b/.test(r.text) ? 400 : 502, r.text.slice(0, 300));
     }
-    return json(r.text);
+    return mutate ? null : json(r.text);
   }
+  // a row is identified by a hash of its columns: identical rows share one reference and go together
+  const hashOf = (cols) => `toString(cityHash64(${cols.map((c) => quoteBacktick(c.name)).join(", ")}))`;
   return {
     q,
     async containers({ counts = true } = {}) {
       const r = await q("select name, total_rows from system.tables where database={db:String} and not startsWith(name, '.inner') order by name limit " + MAX_CONTAINERS, { db: database });
       return r.data.map((t) => ({ name: t.name, count: counts && t.total_rows !== null ? Number(t.total_rows) : null }));
     },
-    async items({ container, q: text, limit, cursor }) {
+    async items({ container, q: text, limit, cursor, sort, dir }) {
       const offset = offsetFrom(cursor);
       const cols = (await q("select name, type from system.columns where database={db:String} and table={t:String} order by position limit " + MAX_COLS, { db: database, t: container })).data;
       if (!cols.length) throw bad(`There is no table called "${container}".`);
@@ -169,27 +197,40 @@ function openClickhouse(cfg) {
       const where = text ? "where " + cols.slice(0, 12).map((c) => `positionCaseInsensitive(toString(${quoteBacktick(c.name)}), {q:String}) > 0`).join(" or ") : "";
       const params = text ? { q: text } : {};
       const total = Number((await q(`select count() as n from (select 1 from ${tbl} ${where} limit ${COUNT_CAP})`, params)).data[0].n);
-      const raw = (await q(`select ${sel} from ${tbl} ${where} order by ${quoteBacktick(cols[0].name)} limit ${limit + 1} offset ${offset}`, params)).data;
+      const sc = sort && cols.find((c) => c.name === sort), d = dirOf(dir);
+      const order = sc ? `${quoteBacktick(sc.name)} ${d}, ${quoteBacktick(cols[0].name)}` : quoteBacktick(cols[0].name);
+      const raw = (await q(`select ${sel}, ${hashOf(cols)} as __h from ${tbl} ${where} order by ${order} limit ${limit + 1} offset ${offset}`, params)).data;
+      const hashes = raw.map((r) => { const h = r.__h; delete r.__h; return h; });
       const page = raw.slice(0, limit), s = shape(page);
       const more = raw.length > limit || s.rows.length < page.length;
       const nOff = offset + s.rows.length;
-      s.rows.forEach((r, i) => { r.__ref = encodeCursor({ o: offset + i, q: text || "" }); });
-      return { columns: s.columns, rows: s.rows, total, totalCapped: total >= COUNT_CAP, next: more && nOff <= OFFSET_CAP ? encodeCursor({ o: nOff }) : null };
+      s.rows.forEach((r, i) => { r.__ref = encodeCursor({ h: hashes[i] }); });
+      return { sortable: true, columns: s.columns, rows: s.rows, total, totalCapped: total >= COUNT_CAP, next: more && nOff <= OFFSET_CAP ? encodeCursor({ o: nOff }) : null };
     },
     async row({ container, ref }) {
       const r = decodeCursor(ref);
-      if (!Number.isInteger(r.o) || r.o < 0 || r.o > OFFSET_CAP) throw bad("That reference is not valid.");
+      if (!/^\d{1,20}$/.test(String(r?.h))) throw bad("That reference is not valid.");
       const cols = (await q("select name from system.columns where database={db:String} and table={t:String} order by position limit " + MAX_COLS, { db: database, t: container })).data;
       if (!cols.length) throw bad(`There is no table called "${container}".`);
-      const where = r.q ? "where " + cols.slice(0, 12).map((c) => `positionCaseInsensitive(toString(${quoteBacktick(c.name)}), {q:String}) > 0`).join(" or ") : "";
-      return fullRow((await q(`select * from ${quoteBacktick(container)} ${where} order by ${quoteBacktick(cols[0].name)} limit 1 offset ${r.o}`, r.q ? { q: r.q } : {})).data[0]);
+      return fullRow((await q(`select * from ${quoteBacktick(container)} where ${hashOf(cols)} = {h:String} limit 1`, { h: r.h })).data[0]);
+    },
+    async remove({ container, refs }) {
+      if (!write) throw bad("This handle is read only.");
+      const cols = (await q("select name from system.columns where database={db:String} and table={t:String} order by position limit " + MAX_COLS, { db: database, t: container })).data;
+      if (!cols.length) throw bad(`There is no table called "${container}".`);
+      const hs = refs.map((x) => String(decodeCursor(x)?.h));
+      if (!hs.every((h) => /^\d{1,20}$/.test(h))) throw bad("That reference cannot be deleted.");
+      const cond = `${hashOf(cols)} in (${hs.map((h) => `'${h}'`).join(",")})`;
+      const n = Number((await q(`select count() as n from ${quoteBacktick(container)} where ${cond}`)).data[0].n);
+      await q(`alter table ${quoteBacktick(container)} delete where ${cond} settings mutations_sync=1`, {}, { mutate: true });
+      return { deleted: n };
     },
     close() {},
   };
 }
 
 /* ---------------------------------------------------------------- Elasticsearch */
-function openElasticsearch(cfg) {
+function openElasticsearch(cfg, { write = false } = {}) {
   const base = parseUrl(cfg.url, "Elasticsearch").origin + parseUrl(cfg.url, "Elasticsearch").pathname.replace(/\/$/, "");
   async function req(path, body) {
     const headers = { "content-type": "application/json" };
@@ -197,6 +238,7 @@ function openElasticsearch(cfg) {
     const r = await http(base + path, { method: body ? "POST" : "GET", headers, body: body ? JSON.stringify(body) : undefined });
     if (!r.ok) {
       if (r.status === 404) throw bad("There is no such index.");
+      if (/fielddata|Text fields are not optimised|No mapping found/.test(r.text)) throw bad("Elasticsearch cannot sort on that field (text fields cannot be sorted). Pick a number, date or keyword field.");
       throw new HttpError(r.status === 400 ? 400 : 502, `Elasticsearch said: ${r.text.slice(0, 250)}`);
     }
     return json(r.text);
@@ -208,13 +250,13 @@ function openElasticsearch(cfg) {
       return r.filter((i) => !i.index.startsWith(".")).sort((a, b) => a.index.localeCompare(b.index)).slice(0, MAX_CONTAINERS)
         .map((i) => ({ name: i.index, count: counts && i["docs.count"] != null ? Number(i["docs.count"]) : null }));
     },
-    async items({ container, q, limit, cursor }) {
+    async items({ container, q, limit, cursor, sort, dir }) {
       if (!NAME.test(container) || /^[._]/.test(container)) throw bad("That is not a valid index name.");
       const from = offsetFrom(cursor);
       if (from >= 10_000) return { columns: [], rows: [], total: null, totalCapped: false, next: null };
       const size = Math.min(limit, 10_000 - from);
       const r = await req(`/${encodeURIComponent(container)}/_search?timeout=5s`, {
-        size, from, timeout: "5s", track_total_hits: COUNT_CAP, sort: ["_doc"],
+        size, from, timeout: "5s", track_total_hits: COUNT_CAP, sort: sort && FIELD.test(sort) && sort !== "_id" ? [{ [sort]: { order: dirOf(dir), unmapped_type: "keyword" } }, "_doc"] : ["_doc"],
         query: q ? { simple_query_string: { query: q, default_operator: "and", lenient: true } } : { match_all: {} },
       });
       const raw = r.hits.hits.map((h) => ({ _id: h._id, ...(h._source || {}) }));
@@ -223,7 +265,15 @@ function openElasticsearch(cfg) {
       const more = (raw.length === size || s.rows.length < raw.length) && nFrom < 10_000;
       const t = r.hits.total;
       s.rows.forEach((r, i) => { r.__ref = encodeCursor({ v: String(raw[i]._id) }); });
-      return { columns: s.columns, rows: s.rows, total: t.value, totalCapped: t.relation === "gte", next: more ? encodeCursor({ o: nFrom }) : null };
+      return { sortable: true, columns: s.columns, rows: s.rows, total: t.value, totalCapped: t.relation === "gte", next: more ? encodeCursor({ o: nFrom }) : null };
+    },
+    async remove({ container, refs }) {
+      if (!write) throw bad("This handle is read only.");
+      if (!NAME.test(container) || /^[._]/.test(container)) throw bad("That is not a valid index name.");
+      const ids = refs.map((x) => String(decodeCursor(x)?.v ?? "")).filter(Boolean);
+      if (ids.length !== refs.length) throw bad("That reference cannot be deleted.");
+      const r = await req(`/${encodeURIComponent(container)}/_delete_by_query?refresh=true&conflicts=proceed`, { query: { ids: { values: ids } } });
+      return { deleted: r.deleted ?? 0 };
     },
     async row({ container, ref }) {
       if (!NAME.test(container) || /^[._]/.test(container)) throw bad("That is not a valid index name.");
@@ -235,7 +285,7 @@ function openElasticsearch(cfg) {
 }
 
 /* ---------------------------------------------------------------- Qdrant */
-function openQdrant(cfg) {
+function openQdrant(cfg, { write = false } = {}) {
   const base = parseUrl(cfg.url, "Qdrant").origin + parseUrl(cfg.url, "Qdrant").pathname.replace(/\/$/, "");
   async function req(path, body) {
     const headers = { "content-type": "application/json" };
@@ -295,7 +345,15 @@ function openQdrant(cfg) {
       const s = shape(raw);
       if (s.rows.length < raw.length) next = raw[s.rows.length].id; // response size cap: resume at the first dropped point
       s.rows.forEach((r, i) => { r.__ref = encodeCursor({ v: raw[i].__pid }); });
-      return { columns: s.columns, rows: s.rows, total, totalCapped, next: next === null || next === undefined ? null : encodeCursor({ o: next }) };
+      return { sortable: false, columns: s.columns, rows: s.rows, total, totalCapped, next: next === null || next === undefined ? null : encodeCursor({ o: next }) };
+    },
+    async remove({ container, refs }) {
+      if (!write) throw bad("This handle is read only.");
+      if (!NAME.test(container)) throw bad("That is not a valid collection name.");
+      const ids = refs.map((x) => decodeCursor(x)?.v);
+      if (!ids.every((id) => (typeof id === "number" && Number.isInteger(id) && id >= 0) || (typeof id === "string" && /^[0-9a-fA-F-]{8,40}$/.test(id)))) throw bad("That reference cannot be deleted.");
+      await req(`/collections/${encodeURIComponent(container)}/points/delete?wait=true`, { points: ids });
+      return { deleted: ids.length };
     },
     async row({ container, ref }) {
       if (!NAME.test(container)) throw bad("That is not a valid collection name.");
@@ -311,7 +369,7 @@ function openQdrant(cfg) {
 /* ---------------------------------------------------------------- Relata */
 const TYPE_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/;
 export const relataTypes = (cfg) => String(cfg.types || "DocumentChunk").split(",").map((s) => s.trim()).filter(Boolean);
-function openRelata(cfg) {
+function openRelata(cfg, { write = false } = {}) {
   const base = parseUrl(cfg.url, "Relata").origin;
   async function run(sql, timeout = 8000) {
     if (!cfg.token) throw bad("No Relata token is set. Add RELATA_TOKEN to .env or save the connection with a token.");
@@ -332,22 +390,35 @@ function openRelata(cfg) {
         return { name, count: await count(name) };
       });
     },
-    async items({ container, limit, cursor }) {
+    async items({ container, limit, cursor, sort, dir }) {
       if (!TYPE_NAME.test(container) || !relataTypes(cfg).includes(container)) throw bad(`"${container}" is not one of this connection's types.`);
       const offset = offsetFrom(cursor);
       if (offset > OFFSET_CAP) return { columns: [], rows: [], total: null, totalCapped: false, next: null };
-      const [d, total] = await Promise.all([run(`SELECT * FROM ${container} LIMIT ${limit + 1} OFFSET ${offset}`), count(container).catch(() => null)]);
+      const order = sort && TYPE_NAME.test(sort) ? ` ORDER BY ${sort} ${dirOf(dir).toUpperCase()}` : "";
+      const [d, total] = await Promise.all([run(`SELECT * FROM ${container}${order} LIMIT ${limit + 1} OFFSET ${offset}`), count(container).catch(() => null)]);
       const raw = d.data || [], page = raw.slice(0, limit), s = shape(page);
       const more = raw.length > limit || s.rows.length < page.length;
       const nOff = offset + s.rows.length;
-      s.rows.forEach((r, i) => { r.__ref = encodeCursor({ o: offset + i }); });
-      return { columns: s.columns, rows: s.rows, total, totalCapped: false, next: more && nOff <= OFFSET_CAP ? encodeCursor({ o: nOff }) : null };
+      // a row can be deleted when the page has a column that identifies it: "id" or "*_id", filled in and different on every row
+      const keyCol = s.columns.find((c) => (c === "id" || c.endsWith("_id")) && s.rows.every((r) => typeof r[c] === "string" && r[c]) && new Set(s.rows.map((r) => r[c])).size === s.rows.length);
+      s.rows.forEach((r, i) => { r.__ref = encodeCursor(keyCol ? { k: keyCol, v: r[keyCol], o: offset + i } : { o: offset + i }); });
+      return { sortable: true, columns: s.columns, rows: s.rows, total, totalCapped: false, next: more && nOff <= OFFSET_CAP ? encodeCursor({ o: nOff }) : null };
     },
     async row({ container, ref }) {
       if (!TYPE_NAME.test(container) || !relataTypes(cfg).includes(container)) throw bad(`"${container}" is not one of this connection's types.`);
       const o = decodeCursor(ref).o;
       if (!Number.isInteger(o) || o < 0 || o > OFFSET_CAP) throw bad("That reference is not valid.");
       return fullRow((await run(`SELECT * FROM ${container} LIMIT 1 OFFSET ${o}`)).data?.[0]);
+    },
+    async remove({ container, refs }) {
+      if (!write) throw bad("This handle is read only.");
+      if (!TYPE_NAME.test(container) || !relataTypes(cfg).includes(container)) throw bad(`"${container}" is not one of this connection's types.`);
+      const rs = refs.map(decodeCursor);
+      const k = rs[0]?.k;
+      if (!k || !TYPE_NAME.test(k) || !rs.every((r) => r.k === k && typeof r.v === "string" && r.v.length <= 200)) throw bad("Those rows have no id column, so they cannot be deleted safely.");
+      const list = rs.map((r) => `'${r.v.replace(/'/g, "''")}'`).join(", ");
+      const d = await run(`DELETE FROM ${container} WHERE ${k} IN (${list})`, 15_000);
+      return { deleted: Number(d.deleted ?? 0) };
     },
     async query(sql) {
       const s = String(sql || "").trim().replace(/;+\s*$/, "");

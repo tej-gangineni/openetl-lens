@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActionIcon, Alert, Anchor, Badge, Box, Breadcrumbs, Button, Checkbox, CloseButton, Code, Flex, Group, Kbd, Menu, Popover,
+  ActionIcon, Alert, Anchor, Badge, Paper, Box, Breadcrumbs, Button, Checkbox, CloseButton, Code, Flex, Group, Kbd, Menu, Popover,
   ScrollArea, SegmentedControl, Skeleton, Stack, Text, TextInput, Title,
 } from "@mantine/core";
 import { useDebouncedValue, useHotkeys } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { IconAlertCircle, IconColumns3, IconDots, IconPlugConnected, IconSearch, IconTrash } from "@tabler/icons-react";
+import { IconAlertCircle, IconColumns3, IconDots, IconPlugConnected, IconSearch, IconTrash, IconEraser, IconLock } from "@tabler/icons-react";
 import { useApp } from "./AppContext.jsx";
 import { api } from "./api.js";
 import { typeOf } from "./typeMeta.js";
@@ -14,6 +14,7 @@ import { useRows } from "./useRows.js";
 import DataGrid from "./DataGrid.jsx";
 import RowDrawer from "./RowDrawer.jsx";
 import QueryConsole from "./QueryConsole.jsx";
+import { confirmEnableDelete, confirmDeleteRows, setDelete } from "./rowActions.js";
 
 const nf = new Intl.NumberFormat("en-US");
 const STATUS = { up: ["green", "Connected"], down: ["red", "Not reachable"], unknown: ["gray", "Checking"] };
@@ -57,7 +58,19 @@ function TableView({ conn, table, view, count }) {
   const [qInput, setQInput] = useState("");
   const [debounced] = useDebouncedValue(qInput.trim(), 300);
   const q = isRelata ? "" : debounced;
-  const rows = useRows(conn.id, table, q, !query);
+  const [sort, setSort] = useState(null);
+  const rows = useRows(conn.id, table, q, !query, sort);
+  const [checked, setChecked] = useState(() => new Set());
+  const canDelete = !!conn.writable;
+  // click a column: ascending, then descending, then back to the stored order
+  const onSort = useCallback((col) => setSort((p) => (!p || p.col !== col ? { col, dir: "asc" } : p.dir === "asc" ? { col, dir: "desc" } : null)), []);
+  useEffect(() => { setChecked(new Set()); }, [q, sort]);
+  const onCheck = useCallback((k) => setChecked((p) => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n; }), []);
+  const onCheckAll = useCallback(() => setChecked((p) => (rows.rows.length && rows.rows.every((x) => p.has(x.k)) ? new Set() : new Set(rows.rows.map((x) => x.k)))), [rows.rows]);
+  const deleteChecked = () => {
+    const picked = rows.rows.filter((x) => checked.has(x.k));
+    confirmDeleteRows({ conn, table, refs: picked.map((x) => x.r.__ref), onDone: () => { rows.removeKeys(new Set(picked.map((x) => x.k))); setChecked(new Set()); app.loadTables(conn.id, { force: true }); } });
+  };
   const [picked, setPicked] = useState(null);
   const [open, setOpen] = useState({ item: null, opened: false, cols: null });
   const searchRef = useRef(null);
@@ -120,6 +133,9 @@ function TableView({ conn, table, view, count }) {
               <Menu.Dropdown>
                 <Menu.Item leftSection={<IconPlugConnected size={16} />} onClick={test}>Test connection</Menu.Item>
                 <Menu.Divider />
+                {canDelete
+                  ? <Menu.Item leftSection={<IconLock size={16} />} onClick={() => setDelete(conn, false, app.refresh)}>Turn off row deleting</Menu.Item>
+                  : <Menu.Item leftSection={<IconEraser size={16} />} onClick={() => confirmEnableDelete(conn, app.refresh)}>Allow deleting rows…</Menu.Item>}
                 <Menu.Item color="red" leftSection={<IconTrash size={16} />} onClick={() => app.requestDelete(conn)}>Delete connection</Menu.Item>
               </Menu.Dropdown>
             </Menu>
@@ -152,13 +168,26 @@ function TableView({ conn, table, view, count }) {
           <Group justify="flex-end"><ColumnPicker all={rows.columns} picked={picked} onChange={setPicked} /></Group>
         )}
       </Stack>
+      {!query && canDelete && checked.size > 0 && (
+        <Paper withBorder radius="md" px="md" py={6} role="region" aria-label="Selected rows">
+          <Group justify="space-between" wrap="wrap" gap="sm">
+            <Text size="sm" fw={500}>{nf.format(checked.size)} {checked.size === 1 ? "row" : "rows"} selected</Text>
+            <Group gap="xs">
+              <Button size="compact-sm" variant="default" onClick={() => setChecked(new Set())}>Clear</Button>
+              <Button size="compact-sm" color="red" leftSection={<IconTrash size={14} />} onClick={deleteChecked}>Delete</Button>
+            </Group>
+          </Group>
+        </Paper>
+      )}
       <Box flex={1} mih={0}>
         {query ? (
           <QueryConsole conn={conn} table={table} onOpenRow={onOpen} selectedKey={open.opened ? open.item?.k : undefined} />
         ) : (
           <DataGrid
             label={`Rows of ${table}`} items={rows.rows} columns={visible} numeric={rows.numeric} q={q}
-            loading={rows.loading} error={rows.error} done={rows.done} dropped={rows.dropped} resetKey={`${conn.id}|${table}|${q}`}
+            loading={rows.loading} error={rows.error} done={rows.done} dropped={rows.dropped} resetKey={`${conn.id}|${table}|${q}|${sort?.col}|${sort?.dir}`}
+            sort={sort} onSort={onSort} sortable={rows.sortable}
+            checked={canDelete ? checked : undefined} onCheck={onCheck} onCheckAll={onCheckAll}
             onLoadMore={rows.loadMore} onRetry={rows.retry} onDropFirst={rows.dropFirst} onOpen={onGridOpen}
             selectedKey={open.opened ? open.item?.k : undefined}
           />

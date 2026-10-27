@@ -5,7 +5,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { clampInt, bad, HttpError, mapError, shape, mapLimit } from "./util.js";
-import { all, mustFind, publicView, validate, withTemp, addUser, removeConnection, restoreDefaults, hiddenCount, handleFor, dropHandle, closeAll, secrets, find } from "./connections.js";
+import { all, mustFind, isWritable, setWritable, publicView, validate, withTemp, addUser, removeConnection, restoreDefaults, hiddenCount, handleFor, dropHandle, closeAll, secrets, find } from "./connections.js";
 import { TYPES } from "./stores.js";
 
 const port = Number(process.env.PORT) || 4000;
@@ -41,6 +41,15 @@ app.post("/api/connections", h(async (req) => {
   return { connection: publicView(addUser(v)) };
 }));
 
+// Switch "allow deleting rows" on or off for one connection (off by default).
+app.patch("/api/connections/:id/writable", h(async (req) => {
+  const c = mustFind(req.params.id);
+  if (typeof req.body?.writable !== "boolean") throw bad("Send { \"writable\": true } or { \"writable\": false }.");
+  setWritable(c.id, req.body.writable);
+  if (!req.body.writable) dropHandle(c.id + ":w");
+  return { connection: publicView(c) };
+}));
+
 app.delete("/api/connections/:id", h(async (req) => {
   removeConnection(req.params.id);
   dropHandle(req.params.id);
@@ -60,7 +69,9 @@ app.get("/api/c/:id/items", h(async (req) => {
   const q = typeof req.query.q === "string" ? req.query.q.slice(0, 200) : "";
   const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
   if (req.query.cursor !== undefined && cursor === undefined) throw bad("That cursor is not valid.");
-  return handleFor(c).items({ container, q, limit: clampInt(req.query.limit, 1, 200, 100), cursor });
+  const sort = typeof req.query.sort === "string" ? req.query.sort.slice(0, 100) : "";
+  const dir = req.query.dir === "desc" ? "desc" : "asc";
+  return handleFor(c).items({ container, q, limit: clampInt(req.query.limit, 1, 200, 100), cursor, sort, dir });
 }));
 
 // The whole record behind one row, for the detail drawer. ref comes from the row's hidden __ref.
@@ -74,6 +85,16 @@ app.get("/api/c/:id/row", h(async (req) => {
   const row = await hd.row({ container, ref });
   if (!row) throw new HttpError(404, "That record no longer exists.");
   return { row };
+}));
+
+// Delete the rows whose __ref values are listed. Only works on a connection where deleting has been switched on.
+app.post("/api/c/:id/rows/delete", h(async (req) => {
+  const c = mustFind(req.params.id);
+  const { container, refs } = req.body || {};
+  if (!isWritable(c.id)) throw new HttpError(403, "Deleting rows is switched off for this connection. Turn it on from the connection menu first.");
+  if (typeof container !== "string" || !container || container.length > 200) throw bad("Send the table name as container.");
+  if (!Array.isArray(refs) || refs.length < 1 || refs.length > 200 || !refs.every((r) => typeof r === "string" && r.length < 2000)) throw bad("Send between 1 and 200 row references.");
+  return handleFor(c, { write: true }).remove({ container, refs: [...new Set(refs)] });
 }));
 
 app.post("/api/c/:id/query", h(async (req) => {

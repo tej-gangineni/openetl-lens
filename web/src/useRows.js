@@ -13,8 +13,9 @@ export const rankColumns = (cols) => cols.map((c, i) => [c, i]).sort((a, b) => r
 
 // Pages of rows for one table: one request in flight, stale requests aborted when the table, the search
 // or the connection change, at most MAX_ROWS rows kept.
-export function useRows(connId, container, q, enabled = true) {
-  const [s, setS] = useState({ rows: [], dropped: 0, columns: [], numeric: new Set(), total: null, capped: false, loading: false, error: "", done: false });
+export function useRows(connId, container, q, enabled = true, sort = null) {
+  const sortCol = sort?.col || "", sortDir = sort?.dir || "asc";
+  const [s, setS] = useState({ sortable: true, rows: [], dropped: 0, columns: [], numeric: new Set(), total: null, capped: false, loading: false, error: "", done: false });
   const ctrl = useRef(null), gen = useRef(0), inflight = useRef(false), cursor = useRef(null), seq = useRef(0);
 
   const fetchPage = useCallback(async () => {
@@ -25,7 +26,7 @@ export function useRows(connId, container, q, enabled = true) {
     ctrl.current = c;
     try {
       const first = !cursor.current;
-      const d = await api(`/c/${encodeURIComponent(connId)}/items?${qs({ container, q, limit: PAGE, ...(cursor.current ? { cursor: cursor.current } : {}) })}`, { signal: c.signal });
+      const d = await api(`/c/${encodeURIComponent(connId)}/items?${qs({ container, q, limit: PAGE, ...(sortCol ? { sort: sortCol, dir: sortDir } : {}), ...(cursor.current ? { cursor: cursor.current } : {}) })}`, { signal: c.signal });
       if (my !== gen.current) return;
       cursor.current = d.next ?? null;
       setS((p) => {
@@ -40,7 +41,7 @@ export function useRows(connId, container, q, enabled = true) {
           }
         }
         return {
-          ...p, columns, numeric, error: "", done: !d.next,
+          ...p, columns, numeric, sortable: d.sortable !== false, error: "", done: !d.next,
           rows: p.rows.concat(d.rows.map((r) => ({ k: ++seq.current, r }))),
           total: d.total ?? null, capped: !!d.totalCapped,
         };
@@ -50,7 +51,7 @@ export function useRows(connId, container, q, enabled = true) {
     } finally {
       if (my === gen.current) { inflight.current = false; setS((p) => ({ ...p, loading: false })); }
     }
-  }, [connId, container, q]);
+  }, [connId, container, q, sortCol, sortDir]);
 
   // table, search or connection changed (or first mount): cancel, clear, load the first page
   useEffect(() => {
@@ -58,7 +59,7 @@ export function useRows(connId, container, q, enabled = true) {
     gen.current++;
     inflight.current = false;
     cursor.current = null;
-    setS({ rows: [], dropped: 0, columns: [], numeric: new Set(), total: null, capped: false, loading: false, error: "", done: false });
+    setS((p) => ({ sortable: p.sortable, rows: [], dropped: 0, columns: p.columns, numeric: new Set(), total: null, capped: false, loading: false, error: "", done: false }));
     if (enabled && container) fetchPage();
     return () => ctrl.current?.abort();
   }, [fetchPage, enabled, container]);
@@ -67,5 +68,7 @@ export function useRows(connId, container, q, enabled = true) {
   const retry = useCallback(() => { setS((p) => ({ ...p, error: "" })); fetchPage(); }, [fetchPage]);
   // the first 1,000 rows leave the view so the page never holds more than MAX_ROWS
   const dropFirst = useCallback(() => setS((p) => ({ ...p, rows: p.rows.slice(DROP), dropped: p.dropped + DROP })), []);
-  return { ...s, loadMore, retry, dropFirst };
+  // rows that were deleted on the server leave the view without a reload
+  const removeKeys = useCallback((keys) => setS((p) => ({ ...p, rows: p.rows.filter((x) => !keys.has(x.k)), total: p.total === null ? null : Math.max(0, p.total - keys.size) })), []);
+  return { ...s, loadMore, retry, dropFirst, removeKeys };
 }

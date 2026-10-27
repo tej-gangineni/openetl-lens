@@ -1,10 +1,10 @@
 # OpenETL Lens: API contract (v2)
 
-One small read-only app. `server/index.js` (Node, Express) talks to databases; `web/` (React + Vite) talks only to `/api`.
+One small app that reads, and (only where you switch it on) deletes rows. `server/index.js` (Node, Express) talks to databases; `web/` (React + Vite) talks only to `/api`.
 Goals: (1) any data source can be connected at runtime, (2) scrolling is free and never hangs, (3) every read is paginated and bounded.
 
 ## Ground rules (server)
-- READ ONLY. Never run INSERT/UPDATE/DELETE/DDL. PostgreSQL connections set `default_transaction_read_only=on`; ClickHouse uses `readonly=2`;
+- READ ONLY by default. Never run INSERT/UPDATE/DDL. The only write is deleting the rows a user selected, and only on a connection where `writable` has been switched on (see Deleting rows). PostgreSQL connections set `default_transaction_read_only=on`; ClickHouse uses `readonly=2`;
   Relata allows one `SELECT` or `HYBRID_SEARCH` statement only.
 - Every request is bounded: PostgreSQL `statement_timeout=5000`; MongoDB `maxTimeMS: 5000`; ClickHouse `max_execution_time=5`;
   Elasticsearch `timeout=5s`; all `fetch` calls use `AbortSignal.timeout`. A timeout returns HTTP 504 `{error}`.
@@ -65,3 +65,12 @@ The screens, layout and UX rules are in `.claude/skills/lens-ui/SKILL.md`. What 
 - Browsing uses infinite scroll: page size 100, one request in flight, stale requests aborted, search debounced 300 ms, and at most 3,000 rows mounted (then a "Load the next 1,000" button).
 - Show the total as "1,234 rows" or "at least 10,001 rows" when `totalCapped`. Never block the page on a slow store: skeletons per panel, and the server's `error` text with a Retry on failure.
 - Columns are generic (first 8 shown, the rest in the row drawer). A value cut at 2,000 characters is completed with `GET /api/c/:id/row`.
+
+## Sorting
+`GET /api/c/:id/items` also takes `sort=COLUMN&dir=asc|desc`. The response carries `sortable: true|false`. Every store sorts on the server (Qdrant cannot, so it returns `sortable: false` and ignores `sort`). Elasticsearch cannot sort `text` fields and says so with a 400. Sorting keeps the same paging rules: cursor and limits are unchanged.
+
+## Deleting rows (off by default)
+- `PATCH /api/connections/:id/writable` body `{ "writable": true|false }` switches deleting on or off for one connection; it is stored in `connections.json` as `writable: [ids]`. `GET /api/connections` returns `writable` on each connection.
+- `POST /api/c/:id/rows/delete` body `{ "container": "table", "refs": ["<__ref>", ...] }` (1 to 200 refs) -> `{ "deleted": n }`. 403 when `writable` is off. Rows are named by their `__ref`:
+  postgres by single-column primary key (tables without one are refused); mongodb by `_id`; clickhouse by a hash of the row's columns (identical rows go together); elasticsearch by `_id`; qdrant by point id; relata by an `id` or `*_id` column that is filled in and unique on the page (otherwise refused).
+- Deletes use a separate handle that is opened only for this call. The normal handle stays read only (PostgreSQL `default_transaction_read_only=on`, ClickHouse `readonly=2`).
