@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <style>svg{--fg:#1b2333;--bg:#ffffff;--hl:#22407a}@media (prefers-color-scheme:dark){svg{--fg:#e7ebf3;--bg:#151b2b;--hl:#9bb6ee}}</style>
+  <circle cx="14" cy="14" r="10.2" fill="var(--bg)" stroke="var(--fg)" stroke-width="2.4"/>
+  <rect x="8.6" y="9.1" width="10.8" height="2.7" rx="1.35" fill="var(--hl)"/>
+  <rect x="8.6" y="13.2" width="7.4" height="2.7" rx="1.35" fill="var(--fg)" opacity="0.5"/>
+  <rect x="8.6" y="17.3" width="9.2" height="2.7" rx="1.35" fill="var(--fg)" opacity="0.5"/>
+  <path d="M21.7 21.7 28 28" stroke="var(--hl)" stroke-width="3.4" stroke-linecap="round"/>
+</svg>

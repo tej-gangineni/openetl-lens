@@ -1,0 +1,45 @@
+/* OpenETL Lens design tokens. Light by default; dark follows the system.
+   Each connection type sets --accent on its scope container: <div data-scope="postgres">. */
+:root {
+  color-scheme: light dark;
+  --canvas: #f6f7fa; --surface: #ffffff; --sunken: #eef0f5; --hover: #f1f3f8;
+  --ink: #1b2333; --ink-muted: #5b667a; --ink-faint: #8a94a6;
+  --line: #e2e6ee; --line-strong: #cdd3df;
+  --ok: #178a5b; --ok-soft: #e4f5ec; --warn: #a96a00; --warn-soft: #fbf0d9; --bad: #c0392b; --bad-soft: #fbe6e3;
+  /* connection accents */
+  --c-postgres: #2f6aa3; --c-mongodb: #3a8a3f; --c-clickhouse: #b87a00; --c-elasticsearch: #12908f; --c-qdrant: #d23d57; --c-relata: #6d4fe0;
+  --brand: #22407a; /* the OpenETL Lens logo colour, separate from every connection accent */
+  --accent: #2f6aa3;
+  --accent-soft: color-mix(in srgb, var(--accent) 11%, var(--surface));
+  --accent-line: color-mix(in srgb, var(--accent) 32%, var(--line));
+  --on-accent: #ffffff;
+  --focus: color-mix(in srgb, var(--accent) 70%, #ffffff);
+  /* type */
+  --font-ui: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --t-xs: 12px; --t-sm: 13px; --t-md: 14.5px; --t-lg: 17px; --t-xl: 22px; --t-2xl: 30px;
+  /* space, shape, depth */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px; --s-7: 48px;
+  --r-sm: 6px; --r-md: 9px; --r-lg: 14px;
+  --shadow-pop: 0 12px 32px rgba(20, 28, 48, 0.18), 0 2px 6px rgba(20, 28, 48, 0.08);
+  --rail-w: 272px; --topbar-h: 52px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #0e1320; --surface: #151b2b; --sunken: #1b2234; --hover: #1d2438;
+    --ink: #e7ebf3; --ink-muted: #a0aabc; --ink-faint: #75809a;
+    --line: #262f45; --line-strong: #36415c;
+    --ok: #46c08a; --ok-soft: #14301f; --warn: #e0aa3c; --warn-soft: #3a2c0e; --bad: #f08373; --bad-soft: #3b1d1a;
+    --c-postgres: #6fa8de; --c-mongodb: #6cc072; --c-clickhouse: #e6b043; --c-elasticsearch: #4fc9c7; --c-qdrant: #f0768a; --c-relata: #a18cf5;
+    --brand: #9bb6ee;
+    --accent: #6fa8de; --on-accent: #0e1320;
+    --focus: color-mix(in srgb, var(--accent) 80%, #ffffff);
+    --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+}
+[data-scope="postgres"] { --accent: var(--c-postgres); } [data-scope="mongodb"] { --accent: var(--c-mongodb); }
+[data-scope="clickhouse"] { --accent: var(--c-clickhouse); } [data-scope="elasticsearch"] { --accent: var(--c-elasticsearch); }
+[data-scope="qdrant"] { --accent: var(--c-qdrant); } [data-scope="relata"] { --accent: var(--c-relata); }
+/* derived colours must be computed where --accent is set, or a scoped accent keeps the root's tint */
+[data-scope] { --accent-soft: color-mix(in srgb, var(--accent) 11%, var(--surface)); --accent-line: color-mix(in srgb, var(--accent) 32%, var(--line)); --focus: color-mix(in srgb, var(--accent) 70%, #ffffff); }
+@media (prefers-reduced-motion: reduce) { * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }

@@ -1,0 +1,7 @@
+source: https://github.com/vercel-labs/agent-skills/tree/main/skills/react-best-practices
+last upstream change fetched: commit dc8367e6f9
+fetched: 2026-10-27
+license: MIT (declared in SKILL.md front matter)
+
+SKILL.md here = the upstream SKILL.md plus the 'OpenETL Lens notes' block. The verbatim upstream files are in upstream/.
+To refresh, download the files again into upstream/ and re-apply the notes block.

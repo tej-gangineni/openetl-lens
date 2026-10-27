@@ -1,0 +1,8 @@
+node_modules
+web/dist
+.env
+connections.json
+connections.json.tmp
+.DS_Store
+# downloaded skill sources: fetch with scripts/fetch-skills.sh
+.claude/skills/*/upstream/

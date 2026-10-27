@@ -1,0 +1,7 @@
+source: https://github.com/vercel-labs/agent-skills/tree/main/skills/web-design-guidelines + https://github.com/vercel-labs/web-interface-guidelines (command.md)
+last upstream change fetched: commit ba46938889
+fetched: 2026-10-27
+license: not stated in the repository; used here only as local guidance, not republished
+
+SKILL.md here = the upstream SKILL.md plus the 'OpenETL Lens notes' block. The verbatim upstream files are in upstream/.
+To refresh, download the files again into upstream/ and re-apply the notes block.
