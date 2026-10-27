@@ -16,6 +16,7 @@ export const rankColumns = (cols) => cols.map((c, i) => [c, i]).sort((a, b) => r
 export function useRows(connId, container, q, enabled = true, sort = null) {
   const sortCol = sort?.col || "", sortDir = sort?.dir || "asc";
   const [s, setS] = useState({ sortable: true, rows: [], dropped: 0, columns: [], numeric: new Set(), total: null, capped: false, loading: false, error: "", done: false });
+  const [nonce, setNonce] = useState(0);
   const ctrl = useRef(null), gen = useRef(0), inflight = useRef(false), cursor = useRef(null), seq = useRef(0);
 
   const fetchPage = useCallback(async () => {
@@ -62,7 +63,7 @@ export function useRows(connId, container, q, enabled = true, sort = null) {
     setS((p) => ({ sortable: p.sortable, rows: [], dropped: 0, columns: p.columns, numeric: new Set(), total: null, capped: false, loading: false, error: "", done: false }));
     if (enabled && container) fetchPage();
     return () => ctrl.current?.abort();
-  }, [fetchPage, enabled, container]);
+  }, [fetchPage, enabled, container, nonce]);
 
   const loadMore = useCallback(() => { fetchPage(); }, [fetchPage]);
   const retry = useCallback(() => { setS((p) => ({ ...p, error: "" })); fetchPage(); }, [fetchPage]);
@@ -70,5 +71,6 @@ export function useRows(connId, container, q, enabled = true, sort = null) {
   const dropFirst = useCallback(() => setS((p) => ({ ...p, rows: p.rows.slice(DROP), dropped: p.dropped + DROP })), []);
   // rows that were deleted on the server leave the view without a reload
   const removeKeys = useCallback((keys) => setS((p) => ({ ...p, rows: p.rows.filter((x) => !keys.has(x.k)), total: p.total === null ? null : Math.max(0, p.total - keys.size) })), []);
-  return { ...s, loadMore, retry, dropFirst, removeKeys };
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
+  return { ...s, loadMore, retry, dropFirst, removeKeys, reload };
 }

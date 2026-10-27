@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActionIcon, Alert, Anchor, Badge, Paper, Box, Breadcrumbs, Button, Checkbox, CloseButton, Code, Flex, Group, Kbd, Menu, Popover,
-  ScrollArea, SegmentedControl, Skeleton, Stack, Text, TextInput, Title,
+  ScrollArea, SegmentedControl, Skeleton, Stack, Text, TextInput, Title, Tooltip,
 } from "@mantine/core";
 import { useDebouncedValue, useHotkeys } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { IconAlertCircle, IconColumns3, IconDots, IconPlugConnected, IconSearch, IconTrash, IconEraser, IconLock } from "@tabler/icons-react";
+import { IconAlertCircle, IconColumns3, IconDots, IconPlugConnected, IconSearch, IconTrash, IconEraser, IconLock, IconRefresh } from "@tabler/icons-react";
 import { useApp } from "./AppContext.jsx";
 import { api } from "./api.js";
 import { typeOf } from "./typeMeta.js";
@@ -78,11 +78,27 @@ function TableView({ conn, table, view, count }) {
 
   const visible = picked ? rows.columns.filter((c) => picked.includes(c)) : rows.columns.slice(0, DEFAULT_COLS);
   const onOpen = useCallback((item, el, cols) => setOpen({ item, opened: true, cols: cols || null }), []);
+  // data can change behind our back (a pipeline runs, someone deletes): check again when the tab is opened and on demand
+  const { loadTables } = app, reload = rows.reload, empty = rows.rows.length === 0;
+  const refreshAll = useCallback(() => { loadTables(conn.id, { force: true }); reload(); }, [loadTables, conn.id, reload]);
+  useEffect(() => { loadTables(conn.id, { force: true }); }, [conn.id, table]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    let last = Date.now();
+    const onFocus = () => {
+      if (document.visibilityState === "hidden" || Date.now() - last < 10_000) return;
+      last = Date.now();
+      loadTables(conn.id, { force: true });
+      if (empty && !query) reload();
+    };
+    window.addEventListener("focus", onFocus); document.addEventListener("visibilitychange", onFocus);
+    return () => { window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", onFocus); };
+  }, [loadTables, conn.id, reload, empty, query]);
   const onClose = useCallback(() => setOpen((o) => ({ ...o, opened: false })), []);
   const onGridOpen = useCallback((item) => onOpen(item, null, null), [onOpen]);
 
   const totalText = rows.total === null ? "" : rows.capped ? `at least ${nf.format(rows.total)} rows` : `${nf.format(rows.total)} ${rows.total === 1 ? "row" : "rows"}`;
-  const badgeText = count != null ? `${nf.format(count)} ${count === 1 ? "row" : "rows"}` : totalText;
+  const shown = !query && !q && rows.total !== null && !rows.loading ? rows.total : count;
+  const badgeText = shown != null ? `${nf.format(shown)} ${shown === 1 ? "row" : "rows"}${!query && !q && rows.total !== null && rows.capped ? "+" : ""}` : totalText;
   const [sc, sl] = STATUS[app.status(conn.id)] || STATUS.unknown;
 
   const test = async () => {
@@ -126,6 +142,9 @@ function TableView({ conn, table, view, count }) {
                 aria-label="Relata view"
               />
             )}
+            <Tooltip label="Refresh" position="bottom">
+              <ActionIcon variant="default" size="lg" onClick={refreshAll} aria-label={`Refresh ${table}`}><IconRefresh size={18} /></ActionIcon>
+            </Tooltip>
             <Menu position="bottom-end" shadow="md" width={210}>
               <Menu.Target>
                 <ActionIcon variant="default" size="lg" aria-label={`Actions for ${conn.name}`}><IconDots size={18} /></ActionIcon>

@@ -35,10 +35,12 @@ export function useConnections() {
   const loadTables = useCallback((id, { force } = {}) => {
     const cur = tablesRef.current[id];
     if (!force && cur && (cur.status === "ok" || cur.status === "loading")) return;
-    setTable(id, { status: "loading", items: cur?.items || [], error: null });
+    // a refresh of a list that is already on screen happens quietly: the old list stays until the new one arrives
+    const quiet = cur?.status === "ok";
+    if (!quiet) setTable(id, { status: "loading", items: cur?.items || [], error: null });
     api(`/c/${encodeURIComponent(id)}/containers`)
       .then((d) => setTable(id, { status: "ok", items: d.containers || [], error: null }))
-      .catch((e) => setTable(id, { status: "error", items: [], error: e.message }));
+      .catch((e) => { if (!quiet) setTable(id, { status: "error", items: [], error: e.message }); });
   }, [setTable]);
 
   const refresh = useCallback(async () => {
