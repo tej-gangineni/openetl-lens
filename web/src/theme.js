@@ -11,7 +11,7 @@ export const theme = createTheme({
   components: {
     Button: { defaultProps: { radius: "md" } },
     Modal: { defaultProps: { radius: "lg", centered: true, overlayProps: { backgroundOpacity: 0.45, blur: 2 } } },
-    Drawer: { defaultProps: { position: "right", overlayProps: { backgroundOpacity: 0.3 } } },
+    Drawer: { defaultProps: { position: "right", padding: "xl", overlayProps: { backgroundOpacity: 0.3 } } },
     Tooltip: { defaultProps: { withArrow: true, openDelay: 300 } },
     Table: { defaultProps: { highlightOnHover: true, verticalSpacing: "xs" } },
   },
