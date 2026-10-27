@@ -439,6 +439,12 @@ function openRelata(cfg, { write = false } = {}) {
       const unquoted = s.replace(/'(?:[^']|'')*'|"(?:[^"]|"")*"/g, "");
       if (!/^(select|hybrid_search)\b/i.test(s)) throw bad("Only SELECT and HYBRID_SEARCH queries are allowed here.");
       if (unquoted.includes(";")) throw bad("Send one statement at a time: remove the semicolon in the middle of the query.");
+      // a bare COUNT(*) over a whole type gets the live count (Relata's own still includes deleted rows)
+      const m = /^select\s+count\s*\(\s*\*\s*\)(?:\s+as\s+(\w+))?\s+from\s+([A-Za-z_][A-Za-z0-9_]*)$/i.exec(s);
+      if (m && relataTypes(cfg).includes(m[2])) {
+        const t0 = Date.now(), n = await count(m[2]);
+        return { columns: [m[1] || "count"], rows: [{ [m[1] || "count"]: n }], total: 1, totalCapped: false, next: null, ms: Date.now() - t0 };
+      }
       const d = await run(s, 10_000);
       const all = d.data || [], sh = shape(all.slice(0, 200));
       return { columns: d.columns && !all.length ? d.columns.slice(0, MAX_COLS) : sh.columns, rows: sh.rows, total: all.length, totalCapped: false, next: null, ms: d.processing_time_ms ?? null };
